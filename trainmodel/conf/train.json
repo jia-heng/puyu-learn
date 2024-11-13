@@ -1,0 +1,50 @@
+{
+    "training_data":
+    {
+      "path": "E:\\works\\train_data",
+      "sequenceName":"scene{index:04d}.zip.link",
+      "seqNum": 600,
+      "maxSppNum": 2,
+      "frames": 64,
+      "width": 1920,
+      "height": 1024,
+      "crop": 256
+    },
+    "config":
+    {
+      "augment": true,
+      "augmentCfg" : {
+        "sppNum": 2,
+        "crop": 256
+      },
+      "batch_size": 1,
+      "num_workers": 1,
+      "shuffle": true,
+      "drop_last": true,
+      "val_split": 0.05,
+      "seed": 42,
+      "stage": "train"
+    },
+    "buffers":
+    {
+      "normal": "normal",
+      "motion": "motion",
+      "depth": "depth",
+      "w_normal": "w_normal",
+      "w_motion": "w_motion",
+      "w_position": "w_position",
+      "diffuse": "diffuse",
+      "color": "color",
+      "reference": "reference"
+    },
+    "model":
+    {
+      "config_path": "../conf",
+      "config_name": "small_2_spp"
+    },
+    "model2":
+    {
+      "path": "E:\\outputs\\small_2_spp",
+      "name": "epoch=47-val_loss=0.294069.ckpt"
+    }
+}
