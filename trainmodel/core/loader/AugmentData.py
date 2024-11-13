@@ -20,21 +20,15 @@ class DataAugment:
         if not augment:
             return
         self.crop = augCfg["crop"]
-        self.augCfg = self.set_augCfg(src, augCfg, sequence_idxs)
+        self.augCfg = {}
+        # self.augCfg = self.set_augCfg(src, augCfg, sequence_idxs)
 
-
-    def set_augCfg(self, src, augCfg, sequence_idxs):
-        maxSppNum = src["maxSppNum"]
-        height = src["height"]
-        width = src["width"]
-        cfg = {key: {} for key in sequence_idxs}
-        for sequence_idx in sequence_idxs:
-            cfg[sequence_idx]["spp"] = random.sample(range(maxSppNum), augCfg["sppNum"])
-            cfg[sequence_idx]["downsize"] = random.randrange(2)
-            cfg[sequence_idx]["crop"] = (random.randrange(height-self.crop + 1), random.randrange(width-self.crop + 1))
-            cfg[sequence_idx]["rotation"] = random.randrange(4)
-            cfg[sequence_idx]["flip"] = random.randrange(2)
-        return cfg
+    def set_augCfg(self, sequence_idx, randomfunc):
+        # maxSppNum = src["maxSppNum"]
+        # cfg[sequence_idx]["spp"] = random.sample(range(maxSppNum), augCfg["sppNum"]) #从maxSppNum中随机取n个spp
+        self.augCfg["crop"] = (randomfunc(sequence_idx, 0, self.height-self.crop + 1), randomfunc(sequence_idx, 0, self.width-self.crop + 1))
+        self.augCfg["rotation"] = randomfunc(sequence_idx, 0, 4)
+        self.augCfg["flip"] = randomfunc(sequence_idx, 0, 2)
 
     def to_gpu(self, frames):
         for key, value in frames.items():
@@ -45,13 +39,11 @@ class DataAugment:
         # 同一个sequence执行相同操作
         pass
 
-    def __call__(self, frames, sequenceIdx):
+    def __call__(self, frames):
         # 同一个sequence执行相同操作
-        augmentCfg = self.augCfg[sequenceIdx]
+        augmentCfg = self.augCfg
         # reference
         for key, frame in frames.items():
-            if augmentCfg["downsize"] == 1:
-                frame = self.apply_downSample(frame)
             value = self.apply_crop(frame, augmentCfg)
             if augmentCfg["flip"] == 1:
                 value = self.apply_flip(value)
@@ -65,9 +57,6 @@ class DataAugment:
         H_beg = cropCfg[0]
         W_beg = cropCfg[1]
         size = self.crop
-        if augmentCfg["downsize"] == 1:
-            H_beg = int(H_beg / (2 * H - size) * (H - size))
-            W_beg = int(W_beg / (2 * W - size) * (W - size))
         return frame[:, H_beg:H_beg + size, W_beg:W_beg + size]
 
     def apply_downSample(self, frame):

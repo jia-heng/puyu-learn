@@ -145,8 +145,9 @@ class TrainingSampleDataset_ME(TrainingSampleDataset):
 
         # 数据增强 - 随机 spp
         augmentdata = self.augm
-        randomSppIdxs = augmentdata.augCfg[self.sequence_idxs[sequence_idx]]["spp"] if self.augment else range(self.src["maxSppNum"])
-        for n in randomSppIdxs:
+        augmentdata.set_augCfg(sequence_idx, self.rng.derive(idx['epoch']).integers)
+        # randomSppIdxs = augmentdata.augCfg[self.sequence_idxs[sequence_idx]]["spp"] if self.augment else range(self.src["maxSppNum"])
+        for n in range(self.src["maxSppNum"]):
             for feature, channels in buffers.items():
                 data = self.get_feature_data_ME(feature, channels, sequence_idx, data_idx, n)
                 if feature in ["depth", "motionVector"]:
@@ -163,8 +164,7 @@ class TrainingSampleDataset_ME(TrainingSampleDataset):
         # feature_data = augmentdata.to_gpu(feature_data)
         # 数据增强 crop - flip - rotation
         if self.augment:
-            feature_data = augmentdata(feature_data, self.sequence_idxs[sequence_idx])
-            # save_exr_with_path(feature_data, data_idx, save_path=r'E:\s00827220\works\projects\denoise\industrial_graphics_engine\test\augment')
+            feature_data = augmentdata(feature_data)
         else:
             feature_data = augmentdata.apply_pad(feature_data)
         if frame_idx == 0:
