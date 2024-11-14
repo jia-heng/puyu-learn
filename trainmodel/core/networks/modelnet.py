@@ -2,8 +2,8 @@ import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .convunet import ConvUNet
-from .partitioning_pyramid import PartitioningPyramid
+from .convunet import ConvUNet, ConvUNet_v2
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_pixelshuffle
 from ..loss.loss import Features, SMAPE, BaseLoss
 from ..util import normalize_radiance, clip_logp1, dist_cat
 import os
@@ -473,8 +473,8 @@ class model_ME_half(model_ME):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid(4)
-        self.weight_predictor = ConvUNet(
+        self.filter = PartitioningPyramid_pixelshuffle(4)
+        self.weight_predictor = ConvUNet_v2(
             70,
             self.filter.inputs
         )
@@ -502,9 +502,7 @@ class model_ME_half(model_ME):
         encoder_input = torch.concat((
             x['depth'],
             x['normal'],
-            x['diffuse'],
-            x['refraction'],
-            x['reflection'],
+            x['albedo'],
             clip_logp1(normalize_radiance(color))
         ), 1)
         feature = self.encoder(encoder_input)

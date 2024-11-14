@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 def splat(img, kernel, size):
-    # F.unfold()
     h = img.shape[2]
     w = img.shape[3]
     total = torch.zeros_like(img)
@@ -83,7 +82,6 @@ class PartitioningPyramid():
 
         return output
 
-
 def splat_unfold(img, weight, size):
     # img shape: (N, C, H, W)
     # weight shape: (N, size*size, H, W)
@@ -102,25 +100,32 @@ def splat_unfold(img, weight, size):
 
 def upscale_pixelshuffle(img, kernel):
     ps = nn.PixelShuffle(2)
-    # evev = img * kernel[:, :3, :, :]
-    # evod = img * kernel[:, 3:6, :, :]
-    # odev = img * kernel[:, 6:9, :, :]
-    # odod = img * kernel[:, 9:12, :, :]
-    #
-    # temp = torch.cat((evev, evod, odev, odod), dim=1)
-    # temp = torch.stack((evev, evod, odev, odod), dim=2).flatten(1, 2)
 
-    evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, :3])
-    evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3:6])
-    odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6:9])
-    odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9:12])
+    # evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, :3])
+    # evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3:6])
+    # odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6:9])
+    # odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9:12])
+
+    evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 0, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 1, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 2, None])
+    evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 4, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 5, None])
+    odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 7, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 8, None])
+    odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 10, None]) + \
+           torch.einsum('nchw, nchw->nchw', img, kernel[:, 11, None])
+
     temp = torch.cat((evev, evod, odev, odod), dim=1)
     return ps(temp)
 
 class PartitioningPyramid_pixelshuffle():
     def __init__(self, K=5):
         self.K = K
-        self.inputs = [25 + 25 + 1 + 1 + K] + [41 for i in range(K - 1)]
+        self.inputs = [25 + 25 + 1 + 1 + K] + [37 for i in range(K - 1)]
         self.t_lambda_index = 51
 
     def __call__(self, weights, rendered, previous):

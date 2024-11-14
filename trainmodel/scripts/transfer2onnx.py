@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import os
 import numpy as np
 import pyexr
-from core.networks.modelt import GrenderModel, MeModel
+from core.networks.modelt import GrenderModel
 import onnx
 
 def temporal_init(x):
@@ -31,8 +31,7 @@ def savepredictret(img, pad_H, des_path, filename):
 
 
 def transfer2onnx(input_sample, srcpath, despath):
-    # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
-    model = MeModel().cuda()
+    model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     model.eval()
     with torch.no_grad():
         output1, output2 = model(input_sample['color'], input_sample['depth'], input_sample['normal'], input_sample['albedo'], input_sample['motion'], input_sample['temporal'])
@@ -69,7 +68,7 @@ if __name__ == '__main__':
         'temporal': torch.randn(1, 38, 720, 1280).cuda()
     }
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = '..\\model\\onnx\\grender_model_v1_1111.onnx'
+    filepath = '..\\model\\onnx\\grender_model_v1_1011.onnx'
     pad = checkpadding(input_frames)
     temporal = temporal_init(input_frames)
     input_frames['temporal'] = temporal
