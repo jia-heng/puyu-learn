@@ -20,15 +20,6 @@ class DataAugment:
         if not augment:
             return
         self.crop = augCfg["crop"]
-        self.augCfg = {}
-        # self.augCfg = self.set_augCfg(src, augCfg, sequence_idxs)
-
-    def set_augCfg(self, sequence_idx, randomfunc):
-        # maxSppNum = src["maxSppNum"]
-        # cfg[sequence_idx]["spp"] = random.sample(range(maxSppNum), augCfg["sppNum"]) #从maxSppNum中随机取n个spp
-        self.augCfg["crop"] = (randomfunc(sequence_idx, 0, self.height-self.crop + 1), randomfunc(sequence_idx, 0, self.width-self.crop + 1))
-        self.augCfg["rotation"] = randomfunc(sequence_idx, 0, 4)
-        self.augCfg["flip"] = randomfunc(sequence_idx, 0, 2)
 
     def to_gpu(self, frames):
         for key, value in frames.items():
@@ -39,21 +30,22 @@ class DataAugment:
         # 同一个sequence执行相同操作
         pass
 
-    def __call__(self, frames):
+    def __call__(self, frames, sequence_idx, randomfunc):
         # 同一个sequence执行相同操作
-        augmentCfg = self.augCfg
+        offset = (randomfunc(sequence_idx, 0, self.height-self.crop + 1), randomfunc(sequence_idx, 0, self.width-self.crop + 1))
+        rotation = randomfunc(sequence_idx, 0, 4)
+        flip = randomfunc(sequence_idx, 0, 1)
         # reference
         for key, frame in frames.items():
-            value = self.apply_crop(frame, augmentCfg)
-            if augmentCfg["flip"] == 1:
+            value = self.apply_crop(frame, offset)
+            if flip == 1:
                 value = self.apply_flip(value)
-            frames[key] = self.apply_rotation(value, augmentCfg["rotation"])
+            frames[key] = self.apply_rotation(value, float(rotation))
         return frames
 
-    def apply_crop(self, frame, augmentCfg):
+    def apply_crop(self, frame, cropCfg):
         """ 0:height_begin, 1:width_begin """
         C, H, W = frame.shape
-        cropCfg = augmentCfg["crop"]
         H_beg = cropCfg[0]
         W_beg = cropCfg[1]
         size = self.crop

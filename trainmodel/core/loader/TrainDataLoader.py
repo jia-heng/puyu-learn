@@ -3,11 +3,13 @@ import os
 import numpy as np
 from multiprocessing.pool import ThreadPool
 from .video_sampler import VideoSampler
-from .misc import resolve_data_path, Shuffler
+from .misc import resolve_data_path, ACES, Shuffler
 import lightning as L
 import pyexr
 from .AugmentData import DataAugment
 
+import torch.nn.functional as F
+import imageio.v3 as iio
 
 class TrainingSampleDataset(torch.utils.data.Dataset):
     def __init__(self, src, sequence_idxs, rng, augment, batch_size, augm, features, **kwargs):
@@ -119,10 +121,33 @@ class TrainingSampleDataset_ME(TrainingSampleDataset):
             data_np = exr.get()[:, :, :channels].astype(np.float32)
         return torch.from_numpy(data_np).permute(2, 0, 1)
 
+    def save_exr(self, idx, image, path, imgType):
+        # image = np.transpose(image.cpu().numpy()[0], (1,2,0))
+        # image = (ACES(image)*255).astype(np.uint8)
+        # self.save_pool.apply_async(iio.imwrite, [file, image])
+        imgType = str(imgType)
+        output_path = os.path.join(path, 'exr')
+        os.makedirs(output_path, exist_ok=True)
+        filename = '{imgType}_{idx:04d}.exr'.format(imgType=imgType, idx=idx)
+        file_path = os.path.join(output_path, filename)
+        image_array = np.transpose(image.cpu().numpy(), (1, 2, 0))
+        pyexr.write(file_path, image_array)
+
+    def save_png(self, idx, image, path, imgType):
+        imgType = str(imgType)
+        output_path = os.path.join(path, 'png')
+        os.makedirs(output_path, exist_ok=True)
+        filename = '{imgType}_{idx:04d}.png'.format(imgType=imgType, idx=idx)
+        file_path = os.path.join(output_path, filename)
+
+        image = np.transpose(image.cpu().numpy(), (1, 2, 0))
+        image = (ACES(image) * 255).astype(np.uint8)
+        iio.imwrite(file_path, image)
+
     def __getitem__(self, idx):
         # idx: sequence_idx * frames_per_sequence + frame_idx
         frame_idx = idx['idx'] % self.frames_per_sequence  # color0000 % frame_idx
-        sequence_idx = idx['idx'] // self.frames_per_sequence  # scene0000 % sequence_idx
+        sequence_idx = idx['idx'] // self.frames_per_sequence  # sequence_idxs 的索引, 不一定是真实值
         ref_path = os.path.join(self.files[sequence_idx], "reference")
         # 首帧的index
         index = int(sorted(os.listdir(ref_path))[0].split('_')[1][:-4])
@@ -143,9 +168,6 @@ class TrainingSampleDataset_ME(TrainingSampleDataset):
         }
         feature_data = {key: [] for key in buffers}
 
-        # 数据增强 - 随机 spp
-        augmentdata = self.augm
-        augmentdata.set_augCfg(sequence_idx, self.rng.derive(idx['epoch']).integers)
         # randomSppIdxs = augmentdata.augCfg[self.sequence_idxs[sequence_idx]]["spp"] if self.augment else range(self.src["maxSppNum"])
         for n in range(self.src["maxSppNum"]):
             for feature, channels in buffers.items():
@@ -159,14 +181,22 @@ class TrainingSampleDataset_ME(TrainingSampleDataset):
             stacked_tensors = torch.stack(feature_data[feature], dim=0)
             feature_data[feature] = torch.mean(stacked_tensors, dim=0)
 
-        reference = augmentdata.apply_downSample(reference)
+        reference = self.augm.apply_downSample(reference)
         feature_data["reference"] = reference
-        # feature_data = augmentdata.to_gpu(feature_data)
+        # feature_data = self.augm.to_gpu(feature_data)
         # 数据增强 crop - flip - rotation
         if self.augment:
-            feature_data = augmentdata(feature_data)
+            feature_data = self.augm(feature_data, self.sequence_idxs[sequence_idx], self.rng.derive(idx['epoch']).integers)
+            # save_exr_with_path(feature_data, data_idx, save_path=r'E:\s00827220\works\projects\denoise\industrial_graphics_engine\test\augment')
         else:
-            feature_data = augmentdata.apply_pad(feature_data)
+            feature_data = self.augm.apply_pad(feature_data)
+        # path = r'.\test\temp'
+        # for key,value in feature_data.items():
+        # self.save_png(idx['idx'], feature_data['color'], path, 'color')
+        # if self.augment:
+        #     self.save_png(idx['idx'], feature_data['reference'], path, 'reference')
+        # self.save_png(idx['idx'], F.pad(feature_data['motionVector'], (0, 0, 0, 0, 0, 1)), path, 'motionVector')
+
         if frame_idx == 0:
             feature_data["motionVector"] = torch.zeros_like(feature_data["motionVector"])
         frame = {'color':   feature_data["color"],

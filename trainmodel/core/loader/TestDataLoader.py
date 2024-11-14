@@ -98,6 +98,7 @@ class baseTestDataset(torch.utils.data.Dataset):
             for key, value in data.items()
         }
 
+
 class TestDataset_ME(baseTestDataset):
     def get_feature_data_ME(self, feature, channels, sequence_idx, frame_idx, sppNum=0):
         featurePath = os.path.join(
@@ -130,7 +131,6 @@ class TestDataset_ME(baseTestDataset):
             # "reflection": 1,  # jihu 图层有问题，暂不添加
         }
         feature_data = {key: [] for key in buffers}
-
         for feature, channels in buffers.items():
             data = self.get_feature_data(feature, channels, sequence_idx, data_idx, 0)
             if feature in ["depth", "motionVector"]:
@@ -141,7 +141,6 @@ class TestDataset_ME(baseTestDataset):
         for feature in feature_data:
             stacked_tensors = torch.stack(feature_data[feature], dim=0)
             feature_data[feature] = torch.mean(stacked_tensors, dim=0)
-
         feature_data = self.augmentdata.apply_pad(feature_data)
         if frame_idx == 0:
             feature_data["motionVector"] = torch.zeros_like(feature_data["motionVector"])

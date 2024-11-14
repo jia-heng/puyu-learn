@@ -208,7 +208,7 @@ class model_ME(BaseModel):
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=1e-4)
-        sched = torch.optim.lr_scheduler.ExponentialLR(opt, 0.98)
+        sched = torch.optim.lr_scheduler.ExponentialLR(opt, 0.96)
         return [opt], [sched]
 
     def create_meshgrid(self, motion):
@@ -278,8 +278,7 @@ class model_ME(BaseModel):
             temporal = self.temporal_init(x)
             y, _, _ = self.step(x, temporal)
             loss, y = self.one_step_loss(x['reference'], y)
-            loss = None
-                # loss = torch.tensor(0.0, requires_grad=True)
+            # loss = None
         else:
             y_1, temporal, _ = self.step(self.prev_x, self.temporal)
             y_2, _, grid = self.step(x, temporal)
@@ -288,7 +287,8 @@ class model_ME(BaseModel):
                 torch.stack((y_1, y_2), 1),
                 grid
             )
-
+            # if loss > 0.5:
+            #     print(x['file'] + ' loss:', loss)
         self.prev_x = x
         self.temporal = temporal.detach()
         return loss, y
@@ -299,10 +299,23 @@ class model_ME(BaseModel):
             self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
+    def save_exr(self, idx, image, path, imgType):
+        # image = np.transpose(image.cpu().numpy()[0], (1,2,0))
+        # image = (ACES(image)*255).astype(np.uint8)
+        # self.save_pool.apply_async(iio.imwrite, [file, image])
+        imgType = str(imgType)
+        output_path = os.path.join(path, 'exr')
+        os.makedirs(output_path, exist_ok=True)
+        filename = '{imgType}_{idx:04d}.exr'.format(imgType=imgType, idx=idx)
+        file_path = os.path.join(output_path, filename)
+        image_array = np.transpose(image.cpu().numpy()[0], (1, 2, 0))
+        pyexr.write(file_path, image_array)
+
     def validation_step(self, x, batch_idx):
         loss, y = self.bptt_step(x)
-
+        # path = r'.\test\temp'
         if x['frame_index'] == 63:
+            # self.save_exr(self.current_epoch, y.detach(), path, 'validation')
             y = normalize_radiance(y)
             y = torch.pow(y / (y + 1), 1 / 2.2)
             y = dist_cat(y).cpu().numpy()
