@@ -85,41 +85,40 @@ class PartitioningPyramid():
 def splat_unfold(img, weight, size):
     # img shape: (N, C, H, W)
     # weight shape: (N, size*size, H, W)
-    h = img.shape[2]
-    w = img.shape[3]
-    total = torch.zeros_like(img)
-
-    img = F.pad(img, [(size - 1) // 2] * 4)
-    weight = F.pad(weight, [(size - 1) // 2] * 4)
-
-    for i in range(size):
-        for j in range(size):
-            total += img[:, :, i:i + h, j:j + w] * weight[:, i * size + j, None, i:i + h, j:j + w]
-
-    return total
+    B, C, H, W = img.shape
+    padding = (size - 1) // 2
+    total = torch.mean(F.unfold(img.view(-1, 1, H, W), size, padding=padding).view(-1, size*size, H, W) * weight, dim=1)
+    return total.view(-1, C, H, W)
 
 def upscale_pixelshuffle(img, kernel):
     ps = nn.PixelShuffle(2)
 
-    # evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, :3])
-    # evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3:6])
-    # odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6:9])
-    # odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9:12])
+    # evev = img * kernel[:, :3]
+    # evod = img * kernel[:, 3:6]
+    # odev = img * kernel[:, 6:9]
+    # odod = img * kernel[:, 9:12]
 
-    evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 0, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 1, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 2, None])
-    evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 4, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 5, None])
-    odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 7, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 8, None])
-    odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 10, None]) + \
-           torch.einsum('nchw, nchw->nchw', img, kernel[:, 11, None])
+    # evev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 0, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 1, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 2, None])
+    # evod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 3, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 4, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 5, None])
+    # odev = torch.einsum('nchw, nchw->nchw', img, kernel[:, 6, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 7, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 8, None])
+    # odod = torch.einsum('nchw, nchw->nchw', img, kernel[:, 9, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 10, None]) + \
+    #        torch.einsum('nchw, nchw->nchw', img, kernel[:, 11, None])
 
-    temp = torch.cat((evev, evod, odev, odod), dim=1)
+    # temp = torch.cat((evev, evod, odev, odod), dim=1)
+    # imgs = torch.tile(img, (1, 4, 1, 1))
+    temp = torch.cat([
+        img * kernel[:, :3],  # evev
+        img * kernel[:, 3:6],  # evod
+        img * kernel[:, 6:9],  # odev
+        img * kernel[:, 9:12]  # odod
+    ], dim=1)
     return ps(temp)
 
 class PartitioningPyramid_pixelshuffle():
