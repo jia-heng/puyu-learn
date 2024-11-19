@@ -1,12 +1,10 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from .convunet import ConvUNet
 from ..util import clip_logp1, normalize_radiance, tensor_like
-from .partitioning_pyramid import PartitioningPyramid
+from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Large_unet, PartitioningPyramid_Small, PartitioningPyramid_Small_unet, PartitioningPyramid_us2
 import lightning as L
-from mmcv.ops.point_sample import bilinear_grid_sample
-
 
 class GrenderModel(L.LightningModule):
     def __init__(self):
@@ -88,7 +86,7 @@ class GrenderModel(L.LightningModule):
         output2 = torch.concat((color, predict, feature), 1)
         return predict, output2
 
-class model_ME_half(L.LightningModule):
+class model_kernel_init(L.LightningModule):
     def __init__(self):
         super().__init__()
 
@@ -100,14 +98,15 @@ class model_ME_half(L.LightningModule):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid(4)
+        self.filter = PartitioningPyramid_us2()
         self.weight_predictor = ConvUNet(
             70,
             self.filter.inputs
         )
-
-        # self.features = Features(transfer='pu') # Broken with pytorch
         # self.features = Features(transfer='log')
+
+    def tensor_like(self, like, data):
+        return torch.tensor(data, dtype=like.dtype, device=like.device)
 
     def create_meshgrid(self, motion):
         batchsize, channel, height, width = motion.shape
@@ -123,8 +122,8 @@ class model_ME_half(L.LightningModule):
 
         return grid
 
-    def step(self, x, temporal):
-        grid = self.create_meshgrid(x['motion'])
+    def forward(self, color, depth, normal, albedo, motion, temporal):
+        grid = self.create_meshgrid(motion)
         reprojected = F.grid_sample(
             temporal, # permute(0, 3, 1, 2)
             grid,
@@ -136,12 +135,10 @@ class model_ME_half(L.LightningModule):
         prev_output = reprojected[:, 3:6]
         prev_feature = reprojected[:, 6:]
 
-        color = x['color']
-        batch_size = color.shape[0]
         encoder_input = torch.concat((
-            x['depth'],
-            x['normal'],
-            x['albedo'],
+            depth,
+            normal,
+            albedo,
             clip_logp1(normalize_radiance(color))
         ), 1)
         feature = self.encoder(encoder_input)
@@ -158,14 +155,66 @@ class model_ME_half(L.LightningModule):
             feature
         ), 1)
         weights = self.weight_predictor(weight_predictor_input)
-        # weights = [weight.to(torch.float32) for weight in weights]
         t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
-        color = t_lambda * prev_color + (1 - t_lambda) * color
-        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
+        color_mix = t_lambda * prev_color + (1 - t_lambda) * color
+        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
+        predict = self.filter(weights, color_mix, prev_output)
+        output2 = torch.concat((color_mix, predict, feature_mix), 1)
+        return predict, output2
 
-        output = self.filter(weights, color, prev_output)
-        return output, torch.concat((
-            color,
-            output,
-            feature
-        ), 1), grid
+class model_kernel_L(model_kernel_init):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Large_unet()
+        self.weight_predictor = ConvUNet_L(
+            70,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')
+
+class model_kernel_S(model_kernel_init):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_S(
+            70,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')
+
+class model_kernel_T(model_kernel_init):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small(6)
+        self.weight_predictor = ConvUNet_T(
+            70,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')

@@ -4,7 +4,9 @@ import os
 import numpy as np
 import pyexr
 from core.networks.modelt import GrenderModel
+from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T #, model_ret_L, model_ret_S
 import onnx
+from thop import profile
 
 def temporal_init(x):
     shape = list(x['color'].shape)
@@ -31,9 +33,13 @@ def savepredictret(img, pad_H, des_path, filename):
 
 
 def transfer2onnx(input_sample, srcpath, despath):
-    model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
+    # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
+    # model = model_kernel_init().cuda()
+    model = model_kernel_S().cuda()
+
     model.eval()
     with torch.no_grad():
+        # flops, params = profile(model, (input_sample['color'], input_sample['depth'], input_sample['normal'], input_sample['albedo'], input_sample['motion'], input_sample['temporal']))
         output1, output2 = model(input_sample['color'], input_sample['depth'], input_sample['normal'], input_sample['albedo'], input_sample['motion'], input_sample['temporal'])
         torch.onnx.export(
             model,
@@ -55,7 +61,17 @@ def transfer2onnx(input_sample, srcpath, despath):
             #               }
             )
     return output1, output2
+        # print('flops: ', flops, 'params: ', params)
 
+def calcFlops(input_sample):
+    # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
+    # model = model_kernel_init().cuda()
+    model = model_kernel_S().cuda()
+
+    model.eval()
+    with torch.no_grad():
+        flops, params = profile(model, (input_sample['color'], input_sample['depth'], input_sample['normal'], input_sample['albedo'], input_sample['motion'], input_sample['temporal']))
+        print('flops: ', flops, 'params: ', params)
 
 if __name__ == '__main__':
     input_frames = {
@@ -68,10 +84,11 @@ if __name__ == '__main__':
         'temporal': torch.randn(1, 38, 720, 1280).cuda()
     }
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = '..\\model\\onnx\\grender_model_v1_1011.onnx'
+    filepath = ('..\\model\\onnx\\MeModel_Kernel_S_unet_sp3_us1.onnx')
     pad = checkpadding(input_frames)
     temporal = temporal_init(input_frames)
     input_frames['temporal'] = temporal
+
     predict, temporal = transfer2onnx(input_frames, srcpath, filepath)
     path = '..\\test'
     filename = 'predict10090000.exr'
@@ -79,3 +96,4 @@ if __name__ == '__main__':
     model = onnx.load(filepath)
     onnx.checker.check_model(model)
     print(onnx.helper.printable_graph(model.graph))
+    calcFlops(input_frames)
