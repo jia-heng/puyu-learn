@@ -7,6 +7,7 @@ import datetime
 import json
 from core.loader.TrainDataLoader import TrainingSampleLoader_L
 from core.networks.modelnet import BaseModel, model_ME, model_nppd
+from core.networks.modelMe import model_kernel_S
 import glob
 import re
 
@@ -25,9 +26,6 @@ def load_pretrained_weights(model, checkpoint_path):
     return model
 
 def main(cfg):
-    # current_directory = os.getcwd()
-    # parent_directory = os.path.abspath(os.path.join(current_directory, os.pardir))
-    # os.chdir(parent_directory)
     with open(cfg, 'r') as f:
         config_info = json.load(f)
     output_folder = os.path.join('outputs', config_info["model"]["config_name"])
@@ -43,7 +41,8 @@ def main(cfg):
     # best_model_path = min(ckpt_files, key=lambda x: extract_val_loss(x))
     # modelsrc = BaseModel.load_from_checkpoint(checkpoint_path=best_model_path)
     model_path = os.path.join(config_info["model2"]["path"], config_info["model2"]["name"])
-    model = model_ME()
+    # model = model_ME()
+    model = model_kernel_S()
     # model = BaseModel()
     # model = load_pretrained_weights(model, best_model_path)
 
@@ -83,7 +82,6 @@ def main(cfg):
         precision='16-mixed',
         callbacks=[checkpoint_time, checkpoint_epoch],
         logger=logger,
-        use_distributed_sampler = False,
         # devices=1
     )
     trainer.fit(
@@ -94,7 +92,7 @@ def main(cfg):
 
 
 if __name__ == '__main__':
-    # config_path = "conf/grenderTrain.json"
+    # config_path = "./grenderTrain.json"
     config_path = "conf/meTrain.json"
     main(config_path)
 

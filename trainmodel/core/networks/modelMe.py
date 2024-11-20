@@ -2,8 +2,8 @@ import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_pixelshuffle_Small
+from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
 from ..loss.loss import Features, SMAPE, BaseLoss
 from ..util import normalize_radiance, clip_logp1, dist_cat
 import os
@@ -226,7 +226,7 @@ class model_kernel_L(BaseModel):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid()
+        self.filter = PartitioningPyramid_Large()
         self.weight_predictor = ConvUNet_L(
             70,
             self.filter.inputs
@@ -292,7 +292,7 @@ class model_kernel_S(BaseModel):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid_pixelshuffle_Small(4)
+        self.filter = PartitioningPyramid_Small()
         self.weight_predictor = ConvUNet_S(
             70,
             self.filter.inputs

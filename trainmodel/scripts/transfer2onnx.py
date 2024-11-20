@@ -61,7 +61,6 @@ def transfer2onnx(input_sample, srcpath, despath):
             #               }
             )
     return output1, output2
-        # print('flops: ', flops, 'params: ', params)
 
 def calcFlops(input_sample):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
@@ -84,7 +83,7 @@ if __name__ == '__main__':
         'temporal': torch.randn(1, 38, 720, 1280).cuda()
     }
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = ('..\\model\\onnx\\MeModel_Kernel_S_unet_sp3_us1.onnx')
+    filepath = ('..\\model\\onnx\\MeModel_Kernel_S_1080.onnx')
     pad = checkpadding(input_frames)
     temporal = temporal_init(input_frames)
     input_frames['temporal'] = temporal

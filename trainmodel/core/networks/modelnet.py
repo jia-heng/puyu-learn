@@ -2,7 +2,7 @@ import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .convunet import ConvUNet, ConvUNet_L
+from .convunet import ConvUNet
 from .partitioning_pyramid import PartitioningPyramid
 from ..loss.loss import Features, SMAPE, BaseLoss
 from ..util import normalize_radiance, clip_logp1, dist_cat
@@ -256,129 +256,6 @@ class model_ME(BaseModel):
                 prev_color,
                 color
             ), 1))),
-            prev_feature,
-            feature
-        ), 1)
-        weights = self.weight_predictor(weight_predictor_input)
-        # weights = [weight.to(torch.float32) for weight in weights]
-        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
-        color = t_lambda * prev_color + (1 - t_lambda) * color
-        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
-
-        output = self.filter(weights, color, prev_output)
-        return output, torch.concat((
-            color,
-            output,
-            feature
-        ), 1), grid
-
-    def bptt_step(self, x):
-        if x['frame_index'] == 0:
-            # with torch.no_grad():
-            temporal = self.temporal_init(x)
-            y, _, _ = self.step(x, temporal)
-            loss, y = self.one_step_loss(x['reference'], y)
-            # loss = None
-        else:
-            y_1, temporal, _ = self.step(self.prev_x, self.temporal)
-            y_2, _, grid = self.step(x, temporal)
-            loss, y = self.two_step_loss(
-                torch.stack((self.prev_x['reference'], x['reference']), 1),
-                torch.stack((y_1, y_2), 1),
-                grid
-            )
-            # if loss > 0.5:
-            #     print(x['file'] + ' loss:', loss)
-        self.prev_x = x
-        self.temporal = temporal.detach()
-        return loss, y
-
-    def training_step(self, x, batch_idx):
-        loss, y = self.bptt_step(x)
-        if loss:
-            self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        return loss
-
-    def save_exr(self, idx, image, path, imgType):
-        # image = np.transpose(image.cpu().numpy()[0], (1,2,0))
-        # image = (ACES(image)*255).astype(np.uint8)
-        # self.save_pool.apply_async(iio.imwrite, [file, image])
-        imgType = str(imgType)
-        output_path = os.path.join(path, 'exr')
-        os.makedirs(output_path, exist_ok=True)
-        filename = '{imgType}_{idx:04d}.exr'.format(imgType=imgType, idx=idx)
-        file_path = os.path.join(output_path, filename)
-        image_array = np.transpose(image.cpu().numpy()[0], (1, 2, 0))
-        pyexr.write(file_path, image_array)
-
-    def validation_step(self, x, batch_idx):
-        loss, y = self.bptt_step(x)
-        # path = r'.\test\temp'
-        if x['frame_index'] == 63:
-            # self.save_exr(self.current_epoch, y.detach(), path, 'validation')
-            y = normalize_radiance(y)
-            y = torch.pow(y / (y + 1), 1 / 2.2)
-            y = dist_cat(y).cpu().numpy()
-
-            # Writing images can block the rank 0 process for a couple seconds
-            # which often breaks distributed training so we start a separate thread
-            Thread(target=self.save_images, args=(y, batch_idx, self.trainer.current_epoch)).start()
-        if loss:
-            self.log("val_loss", loss, on_epoch=True)
-        return loss
-
-class model_ME_normalize(BaseModel):
-
-    def configure_optimizers(self):
-        opt = torch.optim.Adam(self.parameters(), lr=1e-4)
-        sched = torch.optim.lr_scheduler.ExponentialLR(opt, 0.96)
-        return [opt], [sched]
-
-    def create_meshgrid(self, motion):
-        batchsize, channel, height, width = motion.shape
-        dtype = motion.dtype
-        device = motion.device
-        y = torch.arange(0, height, dtype=dtype, device=device)
-        x = torch.arange(0, width, dtype=dtype, device=device)
-        Y, X = torch.meshgrid(y, x)
-        meshgrid = torch.stack((X, Y), dim=-1)
-
-        grid = meshgrid - motion.permute(0, 2, 3, 1) + 0.5
-        grid = grid / self.tensor_like(grid, [width, height]) * 2 - 1
-
-        return grid
-
-    def step(self, x, temporal):
-        grid = self.create_meshgrid(x['motion'])
-        reprojected = F.grid_sample(
-            temporal, # permute(0, 3, 1, 2)
-            grid,
-            mode='bilinear',
-            padding_mode='zeros',
-            align_corners=False
-        )
-        prev_color = reprojected[:, :3]
-        prev_output = reprojected[:, 3:6]
-        prev_feature = reprojected[:, 6:]
-
-        color = x['color']
-        batch_size = color.shape[0]
-        encoder_input = torch.concat((
-            x['depth'],
-            x['normal'],
-            x['albedo'],
-            color
-        ), 1)
-        feature = self.encoder(encoder_input)
-        # feature = self.encoder(torch.permute(encoder_input, (0, 4, 1, 2, 3)).flatten(0, 1))
-        # feature = torch.mean(feature.unflatten(0, (batch_size, -1)), 1)
-        # Denoiser
-
-        weight_predictor_input = torch.concat((
-            torch.concat((
-                prev_color,
-                color
-            ), 1),
             prev_feature,
             feature
         ), 1)
