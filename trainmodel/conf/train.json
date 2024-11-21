@@ -7,7 +7,7 @@
       "maxSppNum": 2,
       "frames": 64,
       "width": 1920,
-      "height": 1024,
+      "height": 1080,
       "crop": 256
     },
     "config":
@@ -17,15 +17,15 @@
         "sppNum": 2,
         "crop": 256
       },
-      "batch_size": 1,
-      "num_workers": 1,
+      "batch_size": 2,
+      "num_workers": 2,
       "shuffle": true,
       "drop_last": true,
       "val_split": 0.05,
       "seed": 42,
       "stage": "train"
     },
-    "buffers":
+    "features":
     {
       "normal": "normal",
       "motion": "motion",

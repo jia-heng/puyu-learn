@@ -21,14 +21,12 @@ def normalize_radiance(luminance, return_mean = False):
     else:
         return luminance / mean
 
-
 def clip_logp1(x):
     return torch.log(torch.maximum(x, torch.zeros_like(x)) + 1)
 
 ###################
 # Distributed
 ###################
-
 
 def dist_cat(tensor_in):
     if dist.is_available() and dist.is_initialized():
@@ -40,10 +38,8 @@ def dist_cat(tensor_in):
     else:
         return tensor_in
 
-
 def rank_zero():
     return dist.get_rank() == 0
-
 
 def decompress_RGBE(color, exposures):
     """Decompresses per-sample radiance from RGBE compressed data
@@ -61,7 +57,6 @@ def decompress_RGBE(color, exposures):
     exponents = np.exp(exponents * (exposures[1] - exposures[0]) + exposures[0])
     color = color.astype(np.float32)[:3] / 255 * exponents[np.newaxis]
     return color
-
 
 def compress_RGBE(color):
     """Computes RGBE compressed representation of radiance data
@@ -100,20 +95,129 @@ def compress_RGBE(color):
 
     return np.concatenate([rgb_channels, e_channel]), [min_exp, max_exp]
 
+def screen_space_normal(w_normal, W, V, U):
+    """Transforms per-sample world-space normals to screen-space / relative to camera direction
 
-def save_exr_with_path(file: object, id: object, save_path: object = r'midi\temp') -> object:
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
-    for key, tensor in file.items():
-        if isinstance(tensor, torch.Tensor):
-            # 将PyTorch张量转换为numpy数组
-            tensor = tensor.squeeze(0)
-            if (len(tensor.shape) == 3):
-                tensor = tensor.permute(1, 2, 0)
-                pyexr.write(os.path.join(save_path, key + str(id) + '.exr'), tensor.numpy().astype('float16'))
-            if (len(tensor.shape) == 4):
-                tensor = tensor.permute(1, 2, 0, 3)
-                for i in range(tensor.shape[-1]):
-                    pyexr.write(os.path.join(save_path, key + str(id) + '_' + str(i) + '.exr'), tensor[...,i].numpy().astype('float16'))
-        else:
-            print(f"Value for key '{key}' is not a PyTorch tensor and will not be saved.")
+    Args:
+        w_normal (ndarray, 3HWS): per-sample world-space normals
+        W (ndarray, size (3)): vector in world-space that points forward in screen-space
+        V (ndarray, size (3)): vector in world-space that points up in screen-space
+        U (ndarray, size (3)): vector in world-space that points right in screen-space
+
+    Returns:
+        normal (ndarray, 3HWS): per-sample screen-space normals
+    """
+    # TODO: support any number of extra dimensions like apply_array
+    return np.einsum('ij, ihws -> jhws', np.stack([W, U, V], axis=1), w_normal)  # column vectors
+
+def screen_space_position(w_position, pv, height, width):
+    """Projects per-sample world-space positions to screen-space (pixel coordinates)
+
+    Args:
+        w_normal (ndarray, 3HWS): per-sample world-space positions
+        pv (ndarray, size (4,4)): camera view-projection matrix
+        height (int): height of the camera resolution (in pixels)
+        width (int): width of the camera resolution (in pixels)
+
+    Returns:
+        projected (ndarray, 2HWS): Per-sample screen-space position (pixel coordinates).
+            IJ INDEXING! for gather ops and consistency,
+            see backproject_pixel_centers in noisebase.torch.projective for use with grid_sample.
+            Degenerate positions give inf.
+    """
+    # TODO: support any number of extra dimensions like apply_array
+    homogeneous = np.concatenate((  # Pad to homogeneous coordinates
+        w_position,
+        np.ones_like(w_position)[0:1]
+    ))
+
+    # ROW VECTOR ALERT!
+    # DirectX uses row vectors...
+    projected = np.einsum('ij, ihws -> jhws', pv, homogeneous)
+    projected = np.divide(
+        projected[0:2], projected[3],
+        out=np.zeros_like(projected[0:2]),
+        where=projected[3] != 0
+    )
+
+    # directx pixel coordinate fluff
+    projected = projected * np.reshape([0.5 * width, -0.5 * height], (2, 1, 1, 1)).astype(np.float32) \
+                + np.reshape([width / 2, height / 2], (2, 1, 1, 1)).astype(np.float32)
+
+    projected = np.flip(projected, 0)  # height, width; ij indexing
+
+    return projected
+
+def motion_vectors(w_position, w_motion, pv, prev_pv, height, width):
+    """Computes per-sample screen-space motion vectors (in pixels)
+
+    Args:
+        w_position (ndarray, 3HWS): per-sample world-space positions
+        w_motion (ndarray, 3HWS): per-sample world-space positions
+        pv (ndarray, size (4,4)): camera view-projection matrix
+        prev_pv (ndarray, size (4,4)): camera view-projection matrix from previous frame
+        height (int): height of the camera resolution (in pixels)
+        width (int): width of the camera resolution (in pixels)
+
+    Returns:
+        motion (ndarray, 2HWS): Per-sample screen-space motion vectors (in pixels).
+            IJ INDEXING! for gather ops and consistency,
+            see backproject_pixel_centers in noisebase.torch.projective for use with grid_sample.
+            Degenerate positions give inf.
+    """
+    # TODO: support any number of extra dimensions like apply_array (only the docstring here)
+    current = screen_space_position(w_position, pv, height, width)
+    prev = screen_space_position(w_position + w_motion, prev_pv, height, width)
+
+    motion = prev - current
+
+    return motion
+
+def log_depth(w_position, pos):
+    """Computes per-sample compressed depth (disparity-ish)
+
+    Args:
+        w_position (ndarray, 3HWS): per-sample world-space positions
+        pos (ndarray, size (3)): the camera's position in world-space
+
+    Returns:
+        motion (ndarray, 1HWS): per-sample compressed depth
+    """
+    # TODO: support any number of extra dimensions like apply_array
+    d = np.linalg.norm(w_position - np.reshape(pos, (3, 1, 1, 1)), axis=0, keepdims=True)
+    return np.log(1 + 1 / d)
+
+def backproject_pixel_centers(motion, crop_offset, prev_crop_offset, as_grid = False):
+    """Decompresses per-sample radiance from RGBE compressed data
+
+    Args:
+        motion (tensor, N2HW): Per-sample screen-space motion vectors (in pixels)
+            see `noisebase.projective.motion_vectors`
+        crop_offset (tensor, size (2)): offset of random crop (window) from top left corner of camera frame (in pixels)
+        prev_crop_offset (tensor, size (2)): offset of random crop (window) in previous frame
+        as_grid (bool): torch.grid_sample, with align_corners = False format
+
+    Returns:
+        pixel_position (tensor, N2HW): ij indexed pixel coordinates OR
+        pixel_position (tensor, NHW2): xy WH position (-1, 1) IF as_grid
+    """
+    height = motion.shape[2]
+    width = motion.shape[3]
+    dtype = motion.dtype
+    device = motion.device
+
+    pixel_grid = torch.stack(torch.meshgrid(
+        torch.arange(0, height, dtype=dtype, device=device),
+        torch.arange(0, width, dtype=dtype, device=device),
+        indexing='ij'
+    ))
+
+    pixel_pos = pixel_grid + motion - prev_crop_offset[..., None, None] + crop_offset[..., None, None]
+
+    if as_grid:
+        # as needed for grid_sample, with align_corners = False
+        pixel_pos_xy = torch.permute(torch.flip(pixel_pos, (1,)), (0, 2, 3, 1)) + 0.5
+        image_pos = pixel_pos_xy / tensor_like(pixel_pos, [width, height])
+        return image_pos * 2 - 1
+    else:
+        return pixel_pos

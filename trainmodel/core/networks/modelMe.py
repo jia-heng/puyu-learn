@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
 from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
 from ..loss.loss import Features, SMAPE, BaseLoss
-from ..util import normalize_radiance, clip_logp1, dist_cat
+from ..util import normalize_radiance, clip_logp1, dist_cat, backproject_pixel_centers
 import os
 import pyexr
 import numpy as np
@@ -345,6 +345,68 @@ class model_kernel_S(BaseModel):
             output,
             feature
         ), 1), grid
+
+class model_kernel_S_nppd(model_kernel_S):
+    def step(self, x, temporal):
+        grid = backproject_pixel_centers(
+            torch.mean(x['motion'], -1),
+            x['crop_offset'],
+            x['prev_camera']['crop_offset'],
+            as_grid=True
+        )
+
+        reprojected = F.grid_sample(
+            temporal,
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_color = reprojected[:, :3]
+        prev_output = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
+
+        batch_size = x['color'].shape[0]
+        encoder_input = torch.concat((
+            x['depth'],
+            x['normal'],
+            x['diffuse'],
+            clip_logp1(normalize_radiance(x['color']))
+        ), 1)
+
+        feature = self.encoder(
+            torch.permute(encoder_input, (0, 4, 1, 2, 3)).flatten(0,1)
+        )
+
+        feature = torch.mean(feature.unflatten(0, (batch_size, -1)), 1)
+        color = torch.mean(x['color'], -1)
+
+        weight_predictor_input = torch.concat((
+            clip_logp1(normalize_radiance(torch.concat((
+                prev_color,
+                color
+            ), 1))),
+            prev_feature,
+            feature
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        # weights = [weight.to(torch.float32) for weight in weights]
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        color = t_lambda * prev_color + (1 - t_lambda) * color
+        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
+
+        output = self.filter(weights, color, prev_output)
+        return output, torch.concat((
+            color,
+            output,
+            feature
+        ), 1), grid
+
+    def temporal_init(self, x):
+        shape = list(x['reference'].shape)
+        shape[1] = 38
+        return torch.zeros(shape, dtype=x['reference'].dtype, device=x['reference'].device)
 
 class model_ret_L(BaseModel):
     def __init__(self):

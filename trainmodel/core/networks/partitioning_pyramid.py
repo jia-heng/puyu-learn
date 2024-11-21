@@ -77,8 +77,13 @@ def splat_unfold(img, weight, size):
     # weight shape: (N, size*size, H, W)
     B, C, H, W = img.shape
     padding = (size - 1) // 2
-    total = torch.sum(F.unfold(img.view(-1, 1, H, W), size, padding=padding).view(-1, size*size, H, W) * weight, dim=1)
-    return total.view(B, C, H, W)
+    total = torch.sum(
+        F.unfold(img.reshape(B*C, 1, H, W), size, padding=padding).view(B, C, size*size, H, W) *
+        weight.view(B, 1, size*size, H, W),
+        dim=2
+    )
+
+    return total
 
 class PartitioningPyramid():
     def __init__(self, K = 5):
