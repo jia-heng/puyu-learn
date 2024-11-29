@@ -3,12 +3,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Small_part, UNetSplat
 from ..loss.loss import Features, SMAPE, BaseLoss
 from ..util import normalize_radiance, clip_logp1, dist_cat, backproject_pixel_centers
 import os
 import pyexr
 import numpy as np
+
+from .SSR.temporal_attention import TemporalAttention
+from .SSR.modelSSR import FeatureExtractor, ReconstructionNetwork
+
 # def st(t):
 #     return np.transpose(t.cpu().numpy(), (1, 2, 0))
 
@@ -347,9 +351,27 @@ class model_kernel_S(BaseModel):
         ), 1), grid
 
 class model_kernel_S_nppd(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_S(
+            70,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
     def step(self, x, temporal):
         grid = backproject_pixel_centers(
-            torch.mean(x['motion'], -1),
+            x['motion'],
             x['crop_offset'],
             x['prev_camera']['crop_offset'],
             as_grid=True
@@ -367,7 +389,8 @@ class model_kernel_S_nppd(model_kernel_S):
         prev_output = reprojected[:, 3:6]
         prev_feature = reprojected[:, 6:]
 
-        batch_size = x['color'].shape[0]
+        color = x['color']
+        batch_size = color.shape[0]
         encoder_input = torch.concat((
             x['depth'],
             x['normal'],
@@ -375,12 +398,12 @@ class model_kernel_S_nppd(model_kernel_S):
             clip_logp1(normalize_radiance(x['color']))
         ), 1)
 
-        feature = self.encoder(
-            torch.permute(encoder_input, (0, 4, 1, 2, 3)).flatten(0,1)
-        )
-
-        feature = torch.mean(feature.unflatten(0, (batch_size, -1)), 1)
-        color = torch.mean(x['color'], -1)
+        feature = self.encoder(encoder_input)
+        #     torch.permute(encoder_input, (0, 4, 1, 2, 3)).flatten(0,1)
+        # )
+        #
+        # feature = torch.mean(feature.unflatten(0, (batch_size, -1)), 1)
+        # color = torch.mean(x['color'], -1)
 
         weight_predictor_input = torch.concat((
             clip_logp1(normalize_radiance(torch.concat((
@@ -407,6 +430,61 @@ class model_kernel_S_nppd(model_kernel_S):
         shape = list(x['reference'].shape)
         shape[1] = 38
         return torch.zeros(shape, dtype=x['reference'].dtype, device=x['reference'].device)
+
+class model_kernel_SF(BaseModel):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = UNetSplat(70)
+
+        self.features = Features(transfer='log')
+
+    def step(self, x, temporal):
+        grid = self.create_meshgrid(x['motion'])
+        reprojected = F.grid_sample(
+            temporal, # permute(0, 3, 1, 2)
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+        prev_color = reprojected[:, :3]
+        prev_output = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
+
+        color = x['color']
+        batch_size = color.shape[0]
+        encoder_input = torch.concat((
+            x['depth'],
+            x['normal'],
+            x['albedo'],
+            clip_logp1(normalize_radiance(color))
+        ), 1)
+        feature = self.encoder(encoder_input)
+
+        weight_predictor_input = torch.concat((
+            clip_logp1(normalize_radiance(torch.concat((
+                prev_color,
+                color
+            ), 1))),
+            prev_feature,
+            feature
+        ), 1)
+
+        output, color_ac, feature_ac = self.filter(weight_predictor_input, prev_color, color, prev_output, prev_feature, feature)
+        return output, torch.concat((
+            color_ac,
+            output,
+            feature_ac
+        ), 1), grid
 
 class model_ret_L(BaseModel):
     def __init__(self):
@@ -474,26 +552,38 @@ class model_ret_L(BaseModel):
             feature
         ), 1), grid
 
-class model_ret_S(BaseModel):
+class model_ret_SSR(BaseModel):
     def __init__(self):
         super().__init__()
+        self.feature_extractor = FeatureExtractor()
+        self.reconstruct = ReconstructionNetwork(45)
+        self.temporal_attention = TemporalAttention(ch=32, checkpoint=False)
+        # self.encoder = nn.Sequential(
+        #     nn.Conv2d(10, 32, 1),
+        #     nn.LeakyReLU(0.3),
+        #     nn.Conv2d(32, 32, 1),
+        #     nn.LeakyReLU(0.3),
+        #     nn.Conv2d(32, 32, 1)
+        # )
 
-        self.encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.filter = PartitioningPyramid()
-        self.weight_predictor = ConvUNet(
-            70,
-            self.filter.inputs
-        )
+        # self.filter = PartitioningPyramid()
+        # self.weight_predictor = ConvUNet(
+        #     70,
+        #     self.filter.inputs
+        # )
         self.features = Features(transfer='log')
 
+    def temporal_init(self, x):
+        shape = list(x['color'].shape)
+        shape[1] = 10
+        return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
+
     def step(self, x, temporal):
+        ''' temporal: denoised img;
+                    normal;
+                    depth;
+                    albedo;
+                    '''
         grid = self.create_meshgrid(x['motion'])
         reprojected = F.grid_sample(
             temporal, # permute(0, 3, 1, 2)
@@ -502,40 +592,52 @@ class model_ret_S(BaseModel):
             padding_mode='zeros',
             align_corners=False
         )
-        prev_color = reprojected[:, :3]
-        prev_output = reprojected[:, 3:6]
-        prev_feature = reprojected[:, 6:]
+        # prev_color = reprojected[:, :3]
+        # prev_output = reprojected[:, 3:6]
+        # prev_feature = reprojected[:, 6:]
+        color = x['color']
+        normal = x['normal']
+        albedo = x['albedo']
+        depth = x['depth']
+        encoder_feature = torch.concat((clip_logp1(normalize_radiance(color), normal, albedo, depth)), 1)
+        aligned_img = self.temporal_attention([reprojected[:, 0:3, ...], encoder_feature, reprojected])
+        # batch_size = color.shape[0]
+        cur_features = self.feature_extractor(encoder_feature)
+        denoised_img = self.reconstruct(cur_features, aligned_img)
+        temporal = torch.cat([denoised_img, normal, depth, albedo], dim=1)
+
+        return denoised_img, temporal, grid
+
+class model_ret_SSR_nppd(model_ret_SSR):
+    def step(self, x, temporal):
+        grid = backproject_pixel_centers(
+            torch.mean(x['motion'], -1),
+            x['crop_offset'],
+            x['prev_camera']['crop_offset'],
+            as_grid=True
+        )
+        reprojected = F.grid_sample(
+            temporal,
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
 
         color = x['color']
-        batch_size = color.shape[0]
-        encoder_input = torch.concat((
-            x['depth'],
-            x['normal'],
-            x['albedo'],
-            clip_logp1(normalize_radiance(color))
-        ), 1)
-        feature = self.encoder(encoder_input)
-        # feature = self.encoder(torch.permute(encoder_input, (0, 4, 1, 2, 3)).flatten(0, 1))
-        # feature = torch.mean(feature.unflatten(0, (batch_size, -1)), 1)
-        # Denoiser
+        normal = x['normal']
+        albedo = x['albedo']
+        depth = x['depth']
+        encoder_feature = torch.cat((clip_logp1(normalize_radiance(color), normal, albedo, depth)), 1)
+        aligned_img = self.temporal_attention([reprojected[:, 0:3, ...], encoder_feature, reprojected])
+        # batch_size = color.shape[0]
+        cur_features = self.feature_extractor(encoder_feature)
+        denoised_img = self.reconstruct(cur_features, aligned_img)
+        temporal = torch.cat([denoised_img, normal, depth, albedo], dim=1)
 
-        weight_predictor_input = torch.concat((
-            clip_logp1(normalize_radiance(torch.concat((
-                prev_color,
-                color
-            ), 1))),
-            prev_feature,
-            feature
-        ), 1)
-        weights = self.weight_predictor(weight_predictor_input)
-        # weights = [weight.to(torch.float32) for weight in weights]
-        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
-        color = t_lambda * prev_color + (1 - t_lambda) * color
-        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
+        return denoised_img, temporal, grid
 
-        output = self.filter(weights, color, prev_output)
-        return output, torch.concat((
-            color,
-            output,
-            feature
-        ), 1), grid
+    def temporal_init(self, x):
+        shape = list(x['reference'].shape)
+        shape[1] = 10
+        return torch.zeros(shape, dtype=x['reference'].dtype, device=x['reference'].device)

@@ -332,8 +332,8 @@ class TrainingSampleDataset_nppd(torch.utils.data.Dataset):
         if 'reference' in self.buffers:
             frame['reference'] = flip_rotate.apply_array(ds['reference'][frame_idx])
 
-        # for key in self.buffers:
-        #     frame[key] = torch.mean(frame[key], dim=-1)
+        for key in self.buffers:
+            frame[key] = np.mean(frame[key], axis=-1)
 
         ds.store.close()
 
