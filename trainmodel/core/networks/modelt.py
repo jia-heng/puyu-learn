@@ -3,10 +3,9 @@ import torch.nn.functional as F
 import torch.nn as nn
 from ..util import clip_logp1, normalize_radiance, tensor_like
 from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Small_part, UNetSplat
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
 import lightning as L
-from .SSR.temporal_attention import TemporalAttention
-from .SSR.modelSSR import FeatureExtractor, ReconstructionNetwork
+
 
 class GrenderModel(L.LightningModule):
     def __init__(self):
@@ -195,7 +194,7 @@ class model_kernel_S(model_kernel_init):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid_Small_part()
+        self.filter = PartitioningPyramid_Small()
         self.weight_predictor = ConvUNet_S(
             70,
             self.filter.inputs
@@ -240,55 +239,7 @@ class model_kernel_S(model_kernel_init):
         output2 = torch.concat((color_mix, predict, feature_mix), 1)
         return predict, output2
 
-class model_kernel_SF(model_kernel_init):
-    def __init__(self):
-        super().__init__()
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.filter = UNetSplat(70)
-        # self.features = Features(transfer='log')
-    def forward(self, color, depth, normal, albedo, motion, temporal):
-        grid = self.create_meshgrid(motion)
-        # reprojected = bilinear_grid_sample(temporal, grid, align_corners=False)
-        reprojected = F.grid_sample(
-            temporal, # permute(0, 3, 1, 2)
-            grid,
-            mode='bilinear',
-            padding_mode='zeros',
-            align_corners=False
-        )
-        prev_color = reprojected[:, :3]
-        prev_output = reprojected[:, 3:6]
-        prev_feature = reprojected[:, 6:]
-
-        encoder_input = torch.concat((
-            depth,
-            normal,
-            albedo,
-            color
-        ), 1)
-        feature = self.encoder(encoder_input)
-
-        weight_predictor_input = torch.concat((
-            prev_color,
-            color,
-            prev_feature,
-            feature
-        ), 1)
-
-        predict, color_ac, feature_ac = self.filter(weight_predictor_input, prev_color, color, prev_output, prev_feature, feature)
-        output2 = torch.concat((color_ac, predict, feature_ac), 1)
-
-        return predict, output2
-
-class model_kernel_T(model_kernel_init):
+class model_kernel_T(model_kernel_S):
     def __init__(self):
         super().__init__()
 
@@ -306,34 +257,3 @@ class model_kernel_T(model_kernel_init):
             self.filter.inputs
         )
         # self.features = Features(transfer='log')
-
-class model_ret_SSR(model_kernel_init):
-    def __init__(self):
-        super().__init__()
-        self.feature_extractor = FeatureExtractor()
-        self.reconstruct = ReconstructionNetwork(45)
-        self.temporal_attention = TemporalAttention(ch=32, checkpoint=False)
-        # self.features = Features(transfer='log')
-
-    def temporal_init(self, x):
-        shape = list(x['color'].shape)
-        shape[1] = 10
-        return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
-
-    def forward(self, color, depth, normal, albedo, motion, temporal):
-        grid = self.create_meshgrid(motion)
-        reprojected = F.grid_sample(
-            temporal, # permute(0, 3, 1, 2)
-            grid,
-            mode='bilinear',
-            padding_mode='zeros',
-            align_corners=False
-        )
-        encoder_feature = torch.concat((color, normal, albedo, depth), 1)
-        aligned_img = self.temporal_attention([reprojected[:, 0:3, ...], encoder_feature, reprojected])
-        # batch_size = color.shape[0]
-        cur_features = self.feature_extractor(encoder_feature)
-        denoised_img = self.reconstruct(cur_features, aligned_img)
-        temporal = torch.cat([denoised_img, normal, depth, albedo], dim=1)
-
-        return denoised_img, temporal

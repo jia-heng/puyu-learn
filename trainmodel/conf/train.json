@@ -34,8 +34,7 @@
       "w_motion": "w_motion",
       "w_position": "w_position",
       "diffuse": "diffuse",
-      "color": "color",
-      "reference": "reference"
+      "color": "color"
     },
     "model":
     {

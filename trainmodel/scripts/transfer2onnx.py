@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pyexr
 from core.networks.modelt import GrenderModel
-from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T #, model_ret_L, model_ret_S
+from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T
 import onnx
 from thop import profile
 
@@ -35,7 +35,7 @@ def savepredictret(img, pad_H, des_path, filename):
 def transfer2onnx(input_sample, srcpath, despath):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_kernel_S().cuda()
+    model = model_kernel_T().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -65,7 +65,7 @@ def transfer2onnx(input_sample, srcpath, despath):
 def calcFlops(input_sample):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_kernel_S().cuda()
+    model = model_kernel_T().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -83,7 +83,7 @@ if __name__ == '__main__':
         'temporal': torch.randn(1, 38, 720, 1280).cuda()
     }
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = ('..\\model\\onnx\\MeModel_Kernel_S_1080.onnx')
+    filepath = ('..\\model\\onnx\\MeModel_Kernel_T.onnx')
     pad = checkpadding(input_frames)
     temporal = temporal_init(input_frames)
     input_frames['temporal'] = temporal
