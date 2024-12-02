@@ -329,8 +329,7 @@ class TrainingSampleDataset_nppd(torch.utils.data.Dataset):
         if 'diffuse' in self.buffers:
             frame['diffuse'] = flip_rotate.apply_array(ds['diffuse'][frame_idx, ..., 0:self.samples]).astype(np.float32)
 
-        if 'reference' in self.buffers:
-            frame['reference'] = flip_rotate.apply_array(ds['reference'][frame_idx])
+        frame['reference'] = flip_rotate.apply_array(ds['reference'][frame_idx])
 
         for key in self.buffers:
             frame[key] = np.mean(frame[key], axis=-1)

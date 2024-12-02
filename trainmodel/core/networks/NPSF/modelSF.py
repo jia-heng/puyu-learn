@@ -54,8 +54,6 @@ class UNetSplat(nn.Module):
         self.sr_path = nn.ModuleList()
         self.out_path.append(nn.Conv2d(prev_dim, 3, 1))
 
-    def upscale_bil(self, x):
-        return F.upsample(x)
     def forward(self, x, prev_color, color, previous, prev_feature, feature):
         skips = []
         for i in range(self.K):

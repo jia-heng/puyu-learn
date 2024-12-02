@@ -428,6 +428,44 @@ class model_kernel_S_nppd(model_kernel_S):
         shape[1] = 38
         return torch.zeros(shape, dtype=x['reference'].dtype, device=x['reference'].device)
 
+class model_kernel_T(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_T(
+            70,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
+class model_kernel_T_nppd(model_kernel_S_nppd):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_T(
+            70,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
 class model_kernel_SR(BaseModel):
     def __init__(self):
         super().__init__()
