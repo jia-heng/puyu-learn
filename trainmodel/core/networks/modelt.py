@@ -3,9 +3,9 @@ import torch.nn.functional as F
 import torch.nn as nn
 from ..util import clip_logp1, normalize_radiance, tensor_like
 from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
+from .modelSF import UNet_SF
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Small_sp
 import lightning as L
-
 
 class GrenderModel(L.LightningModule):
     def __init__(self):
@@ -257,3 +257,42 @@ class model_kernel_T(model_kernel_S):
             self.filter.inputs
         )
         # self.features = Features(transfer='log')
+
+class model_SF(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+        self.filter = UNet_SF(23, 13)
+        # self.features = Features(transfer='log')
+
+    def forward(self, color, depth, normal, albedo, motion, temporal):
+        ''' temporal: precolor preoutput prefeature 13 '''
+        grid = self.create_meshgrid(motion)
+        reprojected = F.grid_sample(
+            temporal,  # permute(0, 3, 1, 2)
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+        prev_color = reprojected[:, :3]
+        prev_output = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
+
+        feature = torch.concat((
+            depth,
+            normal,
+            albedo
+        ), 1)
+
+        filter_input = torch.concat((
+            prev_output,
+            prev_color,
+            prev_feature,
+            color,
+            feature
+        ), 1)
+
+        output = self.filter(filter_input)
+        predict = output[:, :3]
+
+        return predict, output
