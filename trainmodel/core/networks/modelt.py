@@ -2,9 +2,9 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from ..util import clip_logp1, normalize_radiance, tensor_like
-from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
+from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T, ConvUNet_oidn
 from .modelSF import UNet_SF
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Small_sp
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Tiny
 import lightning as L
 
 class GrenderModel(L.LightningModule):
@@ -253,6 +253,116 @@ class model_kernel_T(model_kernel_S):
 
         self.filter = PartitioningPyramid_Small()
         self.weight_predictor = ConvUNet_T(
+            70,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')
+
+class model_kernel_T_W(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+
+        self.prev_encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_T(
+            64,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')
+
+    def forward(self, color, depth, normal, albedo, motion, temporal):
+        grid = self.create_meshgrid(motion)
+        # reprojected = bilinear_grid_sample(temporal, grid, align_corners=False)
+        reprojected = F.grid_sample(
+            temporal, # permute(0, 3, 1, 2)
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_output = reprojected[:, :3]
+        prev_feature = reprojected[:, 3:]
+
+
+        feature = torch.concat((
+            color,
+            depth,
+            normal,
+            albedo
+        ), 1)
+
+        prev_feature_encoder = self.prev_encoder(prev_feature)
+        feature_encoder = self.encoder(feature)
+
+        weight_predictor_input = torch.concat((
+            prev_feature_encoder,
+            feature_encoder
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
+        color_mix = feature_mix[:, :3]
+        predict = self.filter(weights, color_mix, prev_output)
+        output2 = torch.concat((predict, feature_mix), 1)
+        return predict, output2
+
+class model_kernel_T_WB(model_kernel_T_W):
+    def __init__(self):
+        super().__init__()
+
+        self.prev_encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Tiny()
+        self.weight_predictor = ConvUNet_T(
+            64,
+            self.filter.inputs
+        )
+        # self.features = Features(transfer='log')
+
+class model_kernel_oidn(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_oidn(
             70,
             self.filter.inputs
         )

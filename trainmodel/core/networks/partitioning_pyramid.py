@@ -209,6 +209,36 @@ class PartitioningPyramid_Small():
 
         return output
 
+class PartitioningPyramid_Tiny():
+    def __init__(self, K=5):
+        self.K = K
+        self.inputs = [9 + 9 + 1 + 1 + K] + [9 for i in range(K - 1)]
+        self.t_lambda_index = 19
+
+    def __call__(self, weights, rendered, previous):
+        part_weights = F.softmax(weights[0][:, 20:], 1)
+        partitions = part_weights[:, :, None] * rendered[:, None]
+
+        denoised_levels = [
+            splat_unfold(
+                F.avg_pool2d(partitions[:, i], 2 ** i, 2 ** i),
+                F.softmax(weights[i][:, 0:9], 1),
+                3
+            )
+            for i in range(self.K)
+        ]
+
+        denoised = denoised_levels[-1]
+        for i in reversed(range(self.K - 1)):
+            denoised = denoised_levels[i] + F.interpolate(denoised, scale_factor=2, mode='nearest')
+
+        previous = splat_unfold(previous, F.softmax(weights[0][:, 9:18], 1), 3)
+        t_mu = torch.sigmoid(weights[0][:, 18, None])
+
+        output = t_mu * previous + (1 - t_mu) * denoised
+
+        return output
+
 class PartitioningPyramid_Small_sp():
     def __init__(self, K=5):
         super().__init__()

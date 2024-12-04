@@ -3,16 +3,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T
-from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small
+from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Tiny
 from ..loss.loss import Features, SMAPE, BaseLoss
 from ..util import normalize_radiance, clip_logp1, dist_cat, backproject_pixel_centers
 import os
 import pyexr
 import numpy as np
-
-# def st(t):
-#     return np.transpose(t.cpu().numpy(), (1, 2, 0))
-
 from threading import Thread
 
 class BaseModel(L.LightningModule):
@@ -462,6 +458,167 @@ class model_kernel_T_nppd(model_kernel_S_nppd):
         self.filter = PartitioningPyramid_Small()
         self.weight_predictor = ConvUNet_T(
             70,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
+class model_kernel_T_W(model_kernel_S):
+    def __init__(self):
+        super().__init__()
+
+        self.prev_encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Small()
+        self.weight_predictor = ConvUNet_T(
+            64,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
+    def step(self, x, temporal):
+        grid = self.create_meshgrid(x['motion'])
+        reprojected = F.grid_sample(
+            temporal, # permute(0, 3, 1, 2)
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_output = reprojected[:, :3]
+        prev_feature = reprojected[:, 3:]
+
+        feature = torch.concat((
+            clip_logp1(normalize_radiance(x['color'])),
+            x['depth'],
+            x['normal'],
+            x['albedo']
+        ), 1)
+
+        prev_feature_encoder = self.prev_encoder(prev_feature)
+        feature_encoder = self.encoder(feature)
+
+        weight_predictor_input = torch.concat((
+            prev_feature_encoder,
+            feature_encoder
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
+        color_mix = feature_mix[:, :3]
+        predict = self.filter(weights, color_mix, prev_output)
+        return predict, torch.concat((predict, feature_mix), 1), grid
+
+    def temporal_init(self, x):
+        shape = list(x['color'].shape)
+        shape[1] = 13
+        return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
+
+class model_kernel_T_W_nppd(model_kernel_T_W):
+    def step(self, x, temporal):
+        grid = backproject_pixel_centers(
+            x['motion'],
+            x['crop_offset'],
+            x['prev_camera']['crop_offset'],
+            as_grid=True
+        )
+
+        reprojected = F.grid_sample(
+            temporal,
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_output = reprojected[:, :3]
+        prev_feature = reprojected[:, 3:]
+
+        feature = torch.concat((
+            clip_logp1(normalize_radiance(x['color'])),
+            x['depth'],
+            x['normal'],
+            x['diffuse']
+        ), 1)
+
+        prev_feature_encoder = self.prev_encoder(prev_feature)
+        feature_encoder = self.encoder(feature)
+
+        weight_predictor_input = torch.concat((
+            prev_feature_encoder,
+            feature_encoder
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
+        color_mix = feature_mix[:, :3]
+        predict = self.filter(weights, color_mix, prev_output)
+        return predict, torch.concat((predict, feature_mix), 1), grid
+
+class model_kernel_T_WB(model_kernel_T_W):
+    def __init__(self):
+        super().__init__()
+
+        self.prev_encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Tiny()
+        self.weight_predictor = ConvUNet_T(
+            64,
+            self.filter.inputs
+        )
+        self.features = Features(transfer='log')
+
+class model_kernel_T_WB_nppd(model_kernel_T_W_nppd):
+    def __init__(self):
+        super().__init__()
+
+        self.prev_encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(32, 32, 1)
+        )
+
+        self.filter = PartitioningPyramid_Tiny()
+        self.weight_predictor = ConvUNet_T(
+            64,
             self.filter.inputs
         )
         self.features = Features(transfer='log')

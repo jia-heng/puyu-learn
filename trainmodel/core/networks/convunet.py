@@ -288,7 +288,75 @@ class ConvUNet_T(nn.Module):
         outputs = []
 
         for stage, (i, skip) in zip(self.us_path, reversedl(enumerate(skips))[1:]):
-            x = torch.cat((F.interpolate(x, scale_factor=2), skip), 1)
+            x = torch.cat((F.interpolate(x, scale_factor=2, mode='nearest'), skip), 1)
+            x = stage(x)
+            if i < len(self.out_path):
+                outputs.append(self.out_path[i](x))
+
+        return reversedl(outputs)
+
+class ConvUNet_oidn(nn.Module):
+    def __init__(self, in_chans, out_chans, pool=F.max_pool2d):
+        super().__init__()
+
+        self.pool = pool
+        dims_and_depths_ds = [
+            (32, 32),
+            (48,),
+            (64,),
+            (80,),
+            (96,),
+            (192, 192)
+        ]
+        dims_and_depths_us = [
+            (32, 32),
+            (48, 64),
+            (64, 96),
+            (80, 128),
+            (96, 160)
+        ]
+        self.K = len(out_chans)
+        self.ds_path = nn.ModuleList()
+        prev_dim = in_chans
+        for dims in dims_and_depths_ds:
+            layers = []
+            for dim in dims:
+                layers.append(nn.Conv2d(prev_dim, dim, 3, padding='same'))
+                layers.append(nn.LeakyReLU(0.3))
+                prev_dim = dim
+
+            self.ds_path.append(nn.Sequential(*layers))
+
+        self.us_path = nn.ModuleList()
+        for dims in reversedl(dims_and_depths_us):
+            layers = []
+            layers.append(nn.Conv2d(prev_dim + dims[0], dims[-1], 3, padding='same'))
+            layers.append(nn.LeakyReLU(0.3))
+            prev_dim = dims[-1]
+            layers.append(nn.Conv2d(prev_dim, prev_dim, 3, padding='same'))
+            layers.append(nn.LeakyReLU(0.3))
+
+            self.us_path.append(nn.Sequential(*layers))
+
+        self.out_path = nn.ModuleList()
+        for out_chan, dims in zip(out_chans, dims_and_depths_us):
+            self.out_path.append(nn.Conv2d(dims[-1], out_chan, 1))
+
+    def forward(self, x):
+        skips = []
+
+        for i in range(self.K):
+            x = self.ds_path[i](x)
+            skips.append(x)
+            x = self.pool(x, 2)
+        x = self.ds_path[self.K](x)
+        skips.append(x)
+
+        x = skips[-1]
+        outputs = []
+
+        for stage, (i, skip) in zip(self.us_path, reversedl(enumerate(skips))[1:]):
+            x = torch.cat((F.interpolate(x, scale_factor=2, mode='nearest'), skip), 1)
             x = stage(x)
             if i < len(self.out_path):
                 outputs.append(self.out_path[i](x))
