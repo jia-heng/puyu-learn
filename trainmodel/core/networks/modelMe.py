@@ -462,17 +462,9 @@ class model_kernel_T_nppd(model_kernel_S_nppd):
         )
         self.features = Features(transfer='log')
 
-class model_kernel_T_W(model_kernel_S):
+class model_kernel_T_B(model_kernel_T):
     def __init__(self):
         super().__init__()
-
-        self.prev_encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
 
         self.encoder = nn.Sequential(
             nn.Conv2d(10, 32, 1),
@@ -482,13 +474,12 @@ class model_kernel_T_W(model_kernel_S):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid_Small()
+        self.filter = PartitioningPyramid_Tiny()
         self.weight_predictor = ConvUNet_T(
             64,
             self.filter.inputs
         )
         self.features = Features(transfer='log')
-
     def step(self, x, temporal):
         grid = self.create_meshgrid(x['motion'])
         reprojected = F.grid_sample(
@@ -500,35 +491,35 @@ class model_kernel_T_W(model_kernel_S):
         )
 
         prev_output = reprojected[:, :3]
-        prev_feature = reprojected[:, 3:]
+        prev_color = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
 
-        feature = torch.concat((
-            clip_logp1(normalize_radiance(x['color'])),
+        color = x['color']
+        encoder_input = torch.concat((
+            clip_logp1(normalize_radiance(color)),
             x['depth'],
             x['normal'],
             x['albedo']
         ), 1)
 
-        prev_feature_encoder = self.prev_encoder(prev_feature)
-        feature_encoder = self.encoder(feature)
-
+        feature = self.encoder(encoder_input)
         weight_predictor_input = torch.concat((
-            prev_feature_encoder,
-            feature_encoder
+            prev_feature,
+            feature
         ), 1)
         weights = self.weight_predictor(weight_predictor_input)
         t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
-        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
-        color_mix = feature_mix[:, :3]
-        predict = self.filter(weights, color_mix, prev_output)
-        return predict, torch.concat((predict, feature_mix), 1), grid
+        color = t_lambda * prev_color + (1 - t_lambda) * color
+        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
 
-    def temporal_init(self, x):
-        shape = list(x['color'].shape)
-        shape[1] = 13
-        return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
+        output = self.filter(weights, color, prev_output)
+        return output, torch.concat((
+            output,
+            color,
+            feature
+        ), 1), grid
 
-class model_kernel_T_W_nppd(model_kernel_T_W):
+class model_kernel_T_B_nppd(model_kernel_T_B):
     def step(self, x, temporal):
         grid = backproject_pixel_centers(
             x['motion'],
@@ -546,82 +537,34 @@ class model_kernel_T_W_nppd(model_kernel_T_W):
         )
 
         prev_output = reprojected[:, :3]
-        prev_feature = reprojected[:, 3:]
+        prev_color = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
 
-        feature = torch.concat((
+        color = x['color']
+        encoder_input = torch.concat((
             clip_logp1(normalize_radiance(x['color'])),
             x['depth'],
             x['normal'],
             x['diffuse']
         ), 1)
 
-        prev_feature_encoder = self.prev_encoder(prev_feature)
-        feature_encoder = self.encoder(feature)
+        feature = self.encoder(encoder_input)
 
         weight_predictor_input = torch.concat((
-            prev_feature_encoder,
-            feature_encoder
+            prev_feature,
+            feature
         ), 1)
         weights = self.weight_predictor(weight_predictor_input)
         t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
-        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
-        color_mix = feature_mix[:, :3]
-        predict = self.filter(weights, color_mix, prev_output)
-        return predict, torch.concat((predict, feature_mix), 1), grid
+        color = t_lambda * prev_color + (1 - t_lambda) * color
+        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
 
-class model_kernel_T_WB(model_kernel_T_W):
-    def __init__(self):
-        super().__init__()
-
-        self.prev_encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.filter = PartitioningPyramid_Tiny()
-        self.weight_predictor = ConvUNet_T(
-            64,
-            self.filter.inputs
-        )
-        self.features = Features(transfer='log')
-
-class model_kernel_T_WB_nppd(model_kernel_T_W_nppd):
-    def __init__(self):
-        super().__init__()
-
-        self.prev_encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
-
-        self.filter = PartitioningPyramid_Tiny()
-        self.weight_predictor = ConvUNet_T(
-            64,
-            self.filter.inputs
-        )
-        self.features = Features(transfer='log')
+        output = self.filter(weights, color, prev_output)
+        return output, torch.concat((
+            output,
+            color,
+            feature
+        ), 1), grid
 
 class model_kernel_SR(BaseModel):
     def __init__(self):

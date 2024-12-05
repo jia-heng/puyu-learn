@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from ..util import clip_logp1, normalize_radiance, tensor_like
-from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T, ConvUNet_oidn
+from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T, ConvUNet_oidn, ConvUNet_T2
 from .modelSF import UNet_SF
 from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Tiny
 import lightning as L
@@ -258,17 +258,9 @@ class model_kernel_T(model_kernel_S):
         )
         # self.features = Features(transfer='log')
 
-class model_kernel_T_W(model_kernel_S):
+class model_kernel_T_B(model_kernel_T):
     def __init__(self):
         super().__init__()
-
-        self.prev_encoder = nn.Sequential(
-            nn.Conv2d(10, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1),
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(32, 32, 1)
-        )
 
         self.encoder = nn.Sequential(
             nn.Conv2d(10, 32, 1),
@@ -278,13 +270,52 @@ class model_kernel_T_W(model_kernel_S):
             nn.Conv2d(32, 32, 1)
         )
 
-        self.filter = PartitioningPyramid_Small()
-        self.weight_predictor = ConvUNet_T(
+        self.filter = PartitioningPyramid_Tiny()
+        self.weight_predictor = ConvUNet_T2(
             64,
             self.filter.inputs
         )
         # self.features = Features(transfer='log')
 
+    def forward(self, color, depth, normal, albedo, motion, temporal):
+        grid = self.create_meshgrid(motion)
+        reprojected = F.grid_sample(
+            temporal, # permute(0, 3, 1, 2)
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_output = reprojected[:, :3]
+        prev_color = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
+
+        encoder_input = torch.concat((
+            color,
+            depth,
+            normal,
+            albedo
+        ), 1)
+
+        feature = self.encoder(encoder_input)
+        weight_predictor_input = torch.concat((
+            prev_feature,
+            feature
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        color_mix = t_lambda * prev_color + (1 - t_lambda) * color
+        feature_mix = t_lambda * prev_feature + (1 - t_lambda) * feature
+
+        output = self.filter(weights, color, prev_output)
+        return output, torch.concat((
+            output,
+            color_mix,
+            feature_mix
+        ), 1)
+
+class model_kernel_T_W(model_kernel_S):
     def forward(self, color, depth, normal, albedo, motion, temporal):
         grid = self.create_meshgrid(motion)
         # reprojected = bilinear_grid_sample(temporal, grid, align_corners=False)

@@ -221,11 +221,16 @@ class PartitioningPyramid_Tiny():
 
         denoised_levels = [
             splat_unfold(
-                F.avg_pool2d(partitions[:, i], 2 ** i, 2 ** i),
-                F.softmax(weights[i][:, 0:9], 1),
+                partitions[:, 0],
+                F.softmax(weights[0][:, 0:9], 1),
                 3
             )
-            for i in range(self.K)
+        ] + [splat_unfold(
+                F.avg_pool2d(partitions[:, i], 2 ** i, 2 ** i),
+                F.softmax(weights[i], 1),
+                3
+            )
+            for i in range(1, self.K)
         ]
 
         denoised = denoised_levels[-1]

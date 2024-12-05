@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pyexr
 from core.networks.modelt import GrenderModel
-from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T, model_SF
+from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T, model_kernel_oidn, model_kernel_T_B
 import onnx
 from thop import profile
 
@@ -35,7 +35,7 @@ def savepredictret(img, pad_H, des_path, filename):
 def transfer2onnx(input_sample, srcpath, despath):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_SF().cuda()
+    model = model_kernel_T_B().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -65,7 +65,7 @@ def transfer2onnx(input_sample, srcpath, despath):
 def calcFlops(input_sample):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_SF().cuda()
+    model = model_kernel_T_B().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -74,16 +74,16 @@ def calcFlops(input_sample):
 
 if __name__ == '__main__':
     input_frames = {
-        'color': torch.randn(1, 3, 720, 1280).cuda(),
-        'depth': torch.randn(1, 1, 720, 1280).cuda(),
-        'normal': torch.randn(1, 3, 720, 1280).cuda(),
-        'albedo': torch.randn(1, 3, 720, 1280).cuda(),
-        'motion': torch.randn(1, 2, 720, 1280).cuda(),
+        'color': torch.randn(1, 3, 1080, 1920).cuda(),
+        'depth': torch.randn(1, 1, 1080, 1920).cuda(),
+        'normal': torch.randn(1, 3, 1080, 1920).cuda(),
+        'albedo': torch.randn(1, 3, 1080, 1920).cuda(),
+        'motion': torch.randn(1, 2, 1080, 1920).cuda(),
 
-        'temporal': torch.randn(1, 13, 720, 1280).cuda()
+        'temporal': torch.randn(1, 38, 1080, 1920).cuda()
     }
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = ('..\\model\\onnx\\MeModel_SF.onnx')
+    filepath = ('..\\model\\onnx\\MeModel_Kernel_T_B2.onnx')
     pad = checkpadding(input_frames)
     # temporal = temporal_init(input_frames)
     # input_frames['temporal'] = temporal
@@ -94,5 +94,5 @@ if __name__ == '__main__':
     savepredictret(predict, pad, path, filename)
     model = onnx.load(filepath)
     onnx.checker.check_model(model)
-    print(onnx.helper.printable_graph(model.graph))
+    # print(onnx.helper.printable_graph(model.graph))
     calcFlops(input_frames)
