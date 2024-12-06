@@ -3,7 +3,15 @@ import pyexr
 import os
 import numpy as np
 # from .AugmentData import DataAugment
-
+from multiprocessing.pool import ThreadPool
+from .video_sampler import VideoSampler
+from .misc import resolve_data_path, ACES, Shuffler
+import lightning as L
+import pyexr
+from .AugmentData import DataAugment, FlipRotate
+import zarr
+from ..util import decompress_RGBE, screen_space_normal, motion_vectors, log_depth
+import tqdm
 def walk_through_all_dirs(data_dir, data_name, gbuffers, spp):
     data_files = []
     name_path = os.path.join(data_dir + str(0), data_name)
@@ -84,3 +92,132 @@ class TestDataset_torch(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.src["seqNum"] * self.frames_per_sequence
+
+def normalize(v):
+    """Individually normalize an array of vectors
+
+    Args:
+        v (ndarray, CHW): will be normalized along first dimension
+    """
+    return v / np.linalg.norm(v, axis=0, keepdims=True)
+
+def compute_camera(target, up, pos):
+    # simplified version of FlipRotate.apply_camera
+
+    W = normalize(target - pos) # forward
+    U = normalize(np.cross(W, up)) # right
+    V = normalize(np.cross(U, W)) # up
+
+    return W, V, U, pos,
+
+class TestSampleDataset(torch.utils.data.Dataset):
+    def __init__(self, test, features, **kwargs):
+        super().__init__()
+        self.files = list(map(lambda i: os.path.join(test['path'], test["frameName"].format(index=i)), range(test["frames"])))
+
+        self.rendering_height = test['height']
+        self.rendering_width = test['width']
+        self.buffers = list(features.keys())
+        self.samples = test["sppNum"]
+
+    def __getitem__(self, idx):
+        ds = zarr.group(store=zarr.ZipStore(self.files[idx], mode='r'))  # linux -> win 盘符前去掉 /
+
+        forward, up, left, pos, = compute_camera(
+            np.array(ds['camera_target']),
+            np.array(ds['camera_up']),
+            np.array(ds['camera_position']),
+        )
+        pv = np.array(ds['view_proj_mat'])
+
+        frame = {
+            'view_proj_mat': pv,
+            'camera_position': pos,
+            'camera_forward': forward,
+            'camera_up': up,
+            'camera_left': left,
+            'crop_offset': np.array([28, 0], dtype=np.int32),
+        }
+
+        if idx > 0:
+            pds = zarr.group(store=zarr.ZipStore(self.files[idx - 1], mode='r'))
+            prev_forward, prev_up, prev_left, prev_pos = compute_camera(
+                np.array(pds['camera_target']),
+                np.array(pds['camera_up']),
+                np.array(pds['camera_position']),
+            )
+            prev_pv = np.array(pds['view_proj_mat'])
+
+            frame['prev_camera'] = {
+                'view_proj_mat': prev_pv,
+                'camera_position': prev_pos,
+                'camera_forward': prev_forward,
+                'camera_up': prev_up,
+                'camera_left': prev_left,
+                'crop_offset': np.array([28, 0], dtype=np.int32),
+            }
+            pds.store.close()
+        else:
+            frame['prev_camera'] = frame.copy()
+
+        frame['frame_index'] = np.array((idx,), dtype=np.int32),
+        # frame['file'] = file TODO: load strings to pytorch
+
+        if 'w_normal' in self.buffers or 'normal' in self.buffers:
+            w_normal = ds['normal'][..., 28:-28, :, 0:self.samples].astype(np.float32)
+
+        if 'w_normal' in self.buffers:
+            frame['w_normal'] = w_normal
+
+        if 'normal' in self.buffers:
+            frame['normal'] = screen_space_normal(w_normal, forward, up, left)
+
+        if 'depth' in self.buffers or 'motion' in self.buffers or 'w_position' in self.buffers:
+            w_position = ds['position'][..., 28:-28, :, 0:self.samples]
+
+        if 'motion' in self.buffers or 'w_motion' in self.buffers:
+            w_motion = ds['motion'][..., 28:-28, :, 0:self.samples]
+
+        if 'w_position' in self.buffers:
+            frame['w_position'] = w_position
+
+        if idx > 0:
+            if 'w_motion' in self.buffers:
+                frame['w_motion'] = w_motion
+
+            if 'motion' in self.buffers:
+                motion = motion_vectors(
+                    w_position, w_motion,
+                    pv, prev_pv,
+                    self.rendering_height, self.rendering_width
+                )
+                frame['motion'] = np.clip(motion, -5e3, 5e3)
+        else:
+            if 'w_motion' in self.buffers:
+                frame['w_motion'] = np.zeros_like(w_motion)
+
+            if 'motion' in self.buffers:
+                frame['motion'] = np.zeros_like(w_motion[0:2])
+
+        if 'depth' in self.buffers:
+            frame['depth'] = log_depth(w_position, pos)
+
+        if 'color' in self.buffers:
+            exposure = np.array(ds['exposure'])
+            rgbe = ds['color'][..., 28:-28, :, 0:self.samples]
+            frame['color'] = decompress_RGBE(rgbe, exposure)
+
+        if 'diffuse' in self.buffers:
+            frame['diffuse'] = ds['diffuse'][..., 28:-28, :, 0:self.samples].astype(np.float32)
+
+        frame['reference'] = np.array(ds['reference'][:, 28:-28, :])
+        if self.samples > 1:
+            for key in self.buffers:
+                frame[key] = np.mean(frame[key], axis=-1)
+
+        ds.store.close()
+
+        return frame
+
+    def __len__(self):
+        return len(self.files)

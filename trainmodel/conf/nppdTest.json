@@ -1,0 +1,35 @@
+{
+    "test":
+    {
+      "path": "E:\\s00827220\\works\\projects\\denoise\\nppdstable\\noisebase\\data\\sampleset_v1\\test8\\bistro1",
+      "savepath1": "./test/inferSecne/testme/1206/nppd_base_model_psnr_2spp",
+      "savepath": "./test/inferSecne/testme/1206/nppd_me_model_psnr_8spppng",
+      "frameName":"frame{index:04d}.zip",
+      "maxSppNum": 32,
+      "sppNum": 8,
+      "frames": 160,
+      "width": 1920,
+      "height": 1024
+    },
+    "features":
+    {
+      "normal": "normal",
+      "motion": "motion",
+      "depth": "depth",
+      "w_normal": "w_normal",
+      "w_motion": "w_motion",
+      "w_position": "w_position",
+      "diffuse": "diffuse",
+      "color": "color"
+    },
+    "model1":
+    {
+      "path": "./outputs/small_2_spp",
+      "name": "epoch=47-val_loss=0.294069.ckpt"
+    },
+    "model":
+    {
+      "path": "./outputs/small_2_spp/1205",
+      "name": "epoch=94-val_loss=0.339111.ckpt"
+    }
+}
