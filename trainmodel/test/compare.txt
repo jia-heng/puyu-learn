@@ -1,0 +1,9 @@
+
+model_T_B 1080p
+flops:  307670123520.0 params:  5604541.0
+14.3724 ms        GPU: 1326M
+
+
+model_T 1080p
+flops:  279671792640.0 params:  5441029.0
+17.2981 ms        GPU: 1305M

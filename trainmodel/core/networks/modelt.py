@@ -2,10 +2,11 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from ..util import clip_logp1, normalize_radiance, tensor_like
-from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T, ConvUNet_oidn, ConvUNet_T2
+from .convunet import ConvUNet, ConvUNet_L, ConvUNet_S, ConvUNet_T, ConvUNet_oidn, ConvUNet_T2, ConvUNet_T_relu
 from .modelSF import UNet_SF
 from .partitioning_pyramid import PartitioningPyramid, PartitioningPyramid_Large, PartitioningPyramid_Small, PartitioningPyramid_Tiny
 import lightning as L
+from mmcv.ops.point_sample import bilinear_grid_sample
 
 class GrenderModel(L.LightningModule):
     def __init__(self):
@@ -279,14 +280,14 @@ class model_kernel_T_B(model_kernel_T):
 
     def forward(self, color, depth, normal, albedo, motion, temporal):
         grid = self.create_meshgrid(motion)
-        reprojected = F.grid_sample(
-            temporal, # permute(0, 3, 1, 2)
-            grid,
-            mode='bilinear',
-            padding_mode='zeros',
-            align_corners=False
-        )
-
+        reprojected = bilinear_grid_sample(temporal, grid, align_corners=False)
+        # reprojected = F.grid_sample(
+        #     temporal, # permute(0, 3, 1, 2)
+        #     grid,
+        #     mode='bilinear',
+        #     padding_mode='zeros',
+        #     align_corners=False
+        # )
         prev_output = reprojected[:, :3]
         prev_color = reprojected[:, 3:6]
         prev_feature = reprojected[:, 6:]

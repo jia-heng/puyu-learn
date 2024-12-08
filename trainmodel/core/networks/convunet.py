@@ -321,7 +321,7 @@ class ConvUNet_T2(nn.Module):
         for dims in dims_and_depths_ds:
             layers = []
             for dim in dims:
-                layers.append(nn.Conv2d(prev_dim, dim, 3, padding='same'))
+                layers.append(nn.Conv2d(prev_dim, dim, 3, padding=1))
                 layers.append(nn.LeakyReLU(0.3))
                 prev_dim = dim
 
@@ -330,10 +330,10 @@ class ConvUNet_T2(nn.Module):
         self.us_path = nn.ModuleList()
         for dims in reversedl(dims_and_depths_us):
             layers = []
-            layers.append(nn.Conv2d(prev_dim + dims[0], dims[-1], 3, padding='same'))
+            layers.append(nn.Conv2d(prev_dim + dims[0], dims[-1], 3, padding=1))
             layers.append(nn.LeakyReLU(0.3))
             prev_dim = dims[-1]
-            layers.append(nn.Conv2d(prev_dim, prev_dim, 3, padding='same'))
+            layers.append(nn.Conv2d(prev_dim, prev_dim, 3, padding=1))
             layers.append(nn.LeakyReLU(0.3))
 
             self.us_path.append(nn.Sequential(*layers))
