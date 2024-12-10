@@ -3,8 +3,8 @@ import torch.nn.functional as F
 import os
 import numpy as np
 import pyexr
-from core.networks.modelt import GrenderModel
-from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T, model_kernel_oidn, model_kernel_T_B
+from core.networks.modelt import GrenderModel, model_kernel_F, model_kernel_W
+from core.networks.modelt import model_kernel_init, model_kernel_L, model_kernel_S, model_kernel_T, model_kernel_T_B
 import onnx
 from thop import profile
 
@@ -13,6 +13,17 @@ from thop import profile
 #     shape[1] = 38
 #     return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
 
+def frame_init(H, W, temporal_Ch=38):
+    input_frames = {
+        'color': torch.randn(1, 3, H, W).cuda(),
+        'depth': torch.randn(1, 1, H, W).cuda(),
+        'normal': torch.randn(1, 3, H, W).cuda(),
+        'albedo': torch.randn(1, 3, H, W).cuda(),
+        'motion': torch.randn(1, 2, H, W).cuda(),
+
+        'temporal': torch.randn(1, temporal_Ch, H//2, W//2).cuda()
+    }
+    return input_frames
 
 def checkpadding(input_frames):
     _, C, H, W = input_frames['color'].shape
@@ -35,7 +46,7 @@ def savepredictret(img, pad_H, des_path, filename):
 def transfer2onnx(input_sample, srcpath, despath):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_kernel_T_B().cuda()
+    model = model_kernel_W().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -65,7 +76,7 @@ def transfer2onnx(input_sample, srcpath, despath):
 def calcFlops(input_sample):
     # model = GrenderModel.load_from_checkpoint(checkpoint_path=srcpath).cuda()
     # model = model_kernel_init().cuda()
-    model = model_kernel_T_B().cuda()
+    model = model_kernel_W().cuda()
 
     model.eval()
     with torch.no_grad():
@@ -73,25 +84,18 @@ def calcFlops(input_sample):
         print('flops: ', flops, 'params: ', params)
 
 if __name__ == '__main__':
-    input_frames = {
-        'color': torch.randn(1, 3, 1080, 1920).cuda(),
-        'depth': torch.randn(1, 1, 1080, 1920).cuda(),
-        'normal': torch.randn(1, 3, 1080, 1920).cuda(),
-        'albedo': torch.randn(1, 3, 1080, 1920).cuda(),
-        'motion': torch.randn(1, 2, 1080, 1920).cuda(),
-
-        'temporal': torch.randn(1, 38, 1080, 1920).cuda()
-    }
+    input_frames = frame_init(1088, 1920, 38)
+    # input_frames = frame_init(720, 1280, 30)
     srcpath = '..\\model\\ckpt\\grender_model_v1.ckpt'
-    filepath = ('..\\model\\onnx\\MeModel_Kernel_T_B2.onnx')
-    pad = checkpadding(input_frames)
+    filepath = '..\\model\\onnx\\MeModel_Kernel_F1pr_1080.onnx'
+    # pad = checkpadding(input_frames)
     # temporal = temporal_init(input_frames)
     # input_frames['temporal'] = temporal
 
     predict, temporal = transfer2onnx(input_frames, srcpath, filepath)
     path = '..\\test'
     filename = 'predict10090000.exr'
-    savepredictret(predict, pad, path, filename)
+    # savepredictret(predict, pad, path, filename)
     model = onnx.load(filepath)
     onnx.checker.check_model(model)
     # print(onnx.helper.printable_graph(model.graph))

@@ -68,6 +68,7 @@ class DataAugment:
         """ C H W """
         for key, value in frames.items():
             frames[key] = F.pad(value.unsqueeze(0), self.padding, mode='reflect').squeeze(0)
+            # frames[key] = F.pad(value.unsqueeze(0), self.padding, mode='constant', value=1).squeeze(0)
         return frames
 
     def apply_flip(self, frame):

@@ -295,7 +295,7 @@ class ConvUNet_T(nn.Module):
 
         return reversedl(outputs)
 
-class ConvUNet_T2(nn.Module):
+class ConvUNet_F(nn.Module):
     def __init__(self, in_chans, out_chans, pool=F.max_pool2d):
         super().__init__()
 
