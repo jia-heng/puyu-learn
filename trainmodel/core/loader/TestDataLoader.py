@@ -3,6 +3,7 @@ import pyexr
 import os
 import numpy as np
 from .AugmentData import DataAugment
+from ..util import normalize_radiance, clip_logp1, dist_cat, backproject_pixel_centers
 
 def walk_through_all_dirs(data_dir, data_name, gbuffers, spp):
     data_files = []
@@ -98,7 +99,6 @@ class baseTestDataset(torch.utils.data.Dataset):
             for key, value in data.items()
         }
 
-
 class TestDataset_ME(baseTestDataset):
     def get_feature_data_ME(self, feature, channels, sequence_idx, frame_idx, sppNum=0):
         featurePath = os.path.join(
@@ -159,20 +159,82 @@ class TestDataset_ME(baseTestDataset):
         # H W C Spp -> C H W Spp permute
         return frame
 
-class TestDataset_nppd(baseTestDataset):
+class TestDataset_ME_new(baseTestDataset):
+    def get_feature_data_ME(self, feature, channels, sequence_idx, frame_idx, sppNum=0):
+        featurePath = os.path.join(
+            self.files[sequence_idx],
+            self.src["sppName"].format(index=sppNum),
+            self.features[feature],
+            self.src["featureName"].format(index=frame_idx)
+            )
+        with pyexr.open(featurePath) as exr:
+            data_np = exr.get()[:, :, :channels].astype(np.float32)
+        return torch.from_numpy(data_np).permute(2, 0, 1)
+
     def __getitem__(self, idx):
+        # idx: sequence_idx * frames_per_sequence + frame_idx
         frame_idx = idx % self.frames_per_sequence  # color0000 % frame_idx
         sequence_idx = idx // self.frames_per_sequence  # scene0000 % sequence_idx
-
         temppath = os.path.join(self.files[sequence_idx], "spp00", "color")
         # 首帧的index
-        index = int(sorted(os.listdir(temppath))[0].split('_')[1])
+        index = int(sorted(os.listdir(temppath))[0].split('_')[1][:-4])
         data_idx = frame_idx + index
 
         # 定义特征及其通道数的字典
         buffers = {
             "color": 3,
-            "diffuse": 3,
+            "albedo": 3,
+            "normal": 3,
+            "depth": 1,
+            "motionVector": 2,
+            # "diffuse": 3,
+            # "specular": 3,  # jihu 图层有问题，暂不添加
+        }
+        feature_data = {key: [] for key in buffers}
+        for feature, channels in buffers.items():
+            data = self.get_feature_data(feature, channels, sequence_idx, data_idx, 0)
+            if feature in ["depth", "motionVector"]:
+                data = torch.clamp(data, -5e3, 5e3)
+            feature_data[feature].append(data)
+
+        # 合并特征数据并计算平均值
+        for feature in feature_data:
+            stacked_tensors = torch.stack(feature_data[feature], dim=0)
+            feature_data[feature] = torch.mean(stacked_tensors, dim=0)
+        feature_data = self.augmentdata.apply_pad(feature_data)
+        if frame_idx == 0:
+            feature_data["motionVector"] = torch.zeros_like(feature_data["motionVector"])
+        frame = {'color':   feature_data["color"],
+                 'albedo': feature_data["albedo"],
+                 'normal':  feature_data["normal"],
+                 'depth':   torch.log(1 + 1/feature_data["depth"]),
+                # 'refraction': feature_data["refraction"],
+                # 'reflection': feature_data["reflection"],
+                 'motion': feature_data["motionVector"],
+                 # 'reference': feature_data["reference"],
+                 'frame_index': torch.tensor(frame_idx),
+                 'file': self.files[sequence_idx] + '_' + str(frame_idx)
+                 }
+        # frame['file'] = file TODO: load strings to pytorch
+        # H W C Spp -> C H W Spp permute
+        return frame
+
+class TestDataset_nppd(baseTestDataset):
+    def __getitem__(self, idx):
+        frame_idx = idx % self.frames_per_sequence  # color0000 % frame_idx
+        sequence_idx = idx // self.frames_per_sequence  # scene0000 % sequence_idx
+        ref_path = os.path.join(self.files[sequence_idx], "reference")
+        # 首帧的index
+        index = int(sorted(os.listdir(ref_path))[0].split('_')[1])
+        data_idx = frame_idx + index
+        with pyexr.open(os.path.join(ref_path, self.src["referenceName"].format(index=data_idx))) as exr:
+            reference = exr.get()[:, :, :3].astype(np.float32)
+        reference = torch.from_numpy(reference).permute(2, 0, 1)
+
+        # 定义特征及其通道数的字典
+        buffers = {
+            "color": 3,
+            "albedo": 3,
             "depth": 1,
             "normal": 3,
             "motionVector": 2,
@@ -191,16 +253,17 @@ class TestDataset_nppd(baseTestDataset):
             stacked_tensors = torch.stack(feature_data[feature], dim=0)
             feature_data[feature] = torch.mean(stacked_tensors, dim=0)
         feature_data = self.augmentdata.apply_pad(feature_data)
+        feature_data["reference"] = reference
         if frame_idx == 0:
             feature_data["motionVector"] = torch.zeros_like(feature_data["motionVector"])
-        frame = {'color':   feature_data["color"],
+        frame = {'color':   clip_logp1(normalize_radiance(feature_data["color"])),
                  'normal':  feature_data["normal"],
                  'depth':   feature_data["depth"],
-                 'diffuse': feature_data["diffuse"],
+                 'albedo': feature_data["albedo"],
                  # 'refraction': feature_data["refraction"],
                  # 'reflection': feature_data["reflection"],
                  'motion': feature_data["motionVector"],
-                 # 'reference': feature_data["reference"],
+                 'reference': feature_data["reference"],
                  'frame_index': torch.tensor(frame_idx),
                  'file': self.files[sequence_idx] + '_' + str(frame_idx)
                  }
