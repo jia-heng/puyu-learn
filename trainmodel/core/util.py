@@ -14,15 +14,15 @@ def lrange(start, stop, step=1):
     return list(range(start, stop, step))
 
 def normalize_radiance(luminance, return_mean = False):
-    mean = torch.mean(luminance, lrange(1, luminance.dim()), keepdim=True) + 1e-8
+    mean = 1 / (torch.mean(luminance, lrange(1, luminance.dim()), keepdim=True) + 1e-8)
 
     if return_mean:
-        return luminance / mean, mean
+        return luminance * mean, mean
     else:
-        return luminance / mean
+        return luminance * mean
 
 def clip_logp1(x):
-    return torch.log(torch.maximum(x, torch.zeros_like(x)) + 1)
+    return torch.log(torch.clamp(x, min=0) + 1)
 
 ###################
 # Distributed

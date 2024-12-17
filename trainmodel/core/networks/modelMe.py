@@ -105,7 +105,7 @@ class BaseModel(L.LightningModule):
 
     def one_step_loss(self, ref, pred):
         ref, mean = normalize_radiance(ref, True)
-        pred = pred / mean
+        pred = pred * mean
 
         spatial = SMAPE(ref, pred) * 0.8 * 10 + \
                   self.features.spatial_loss(ref, pred) * 0.5 * 0.2
@@ -114,7 +114,7 @@ class BaseModel(L.LightningModule):
 
     def two_step_loss(self, refs, preds, grid):
         refs, mean = normalize_radiance(refs, True)
-        preds = preds / mean
+        preds = preds * mean
 
         prev_ref = F.grid_sample(
             refs[:, 0],
@@ -712,6 +712,55 @@ class model_kernel_F_nppd(model_kernel_T_B_nppd):
 
         self.features = Features(transfer='log')
 
+    def step(self, x, temporal):
+        grid = backproject_pixel_centers(
+            x['motion'],
+            x['crop_offset'],
+            x['prev_camera']['crop_offset'],
+            as_grid=True
+        )
+
+        reprojected = F.grid_sample(
+            temporal,
+            grid,
+            mode='bilinear',
+            padding_mode='zeros',
+            align_corners=False
+        )
+
+        prev_color = reprojected[:, :3]
+        prev_output = reprojected[:, 3:6]
+        prev_feature = reprojected[:, 6:]
+
+        color = x['color']
+        norm_color, mean = normalize_radiance(color, True)
+        encoder_input = torch.concat((
+            clip_logp1(norm_color),
+            x['depth'],
+            x['normal'],
+            x['diffuse']
+        ), 1)
+
+        feature = self.encoder(encoder_input)
+
+        weight_predictor_input = torch.concat((
+            clip_logp1(prev_color*mean),
+            clip_logp1(norm_color),
+            prev_feature,
+            feature
+        ), 1)
+        weights = self.weight_predictor(weight_predictor_input)
+        t_lambda = torch.sigmoid(weights[0][:, self.filter.t_lambda_index, None])
+        color = t_lambda * prev_color + (1 - t_lambda) * color
+        feature = t_lambda * prev_feature + (1 - t_lambda) * feature
+
+        output = self.filter(weights, color, prev_output)
+        return output, torch.concat((
+            color,
+            output,
+            feature
+        ), 1), grid
+
     def temporal_init(self, x):
         shape = list(x['color'].shape)
         shape[1] = 19
@@ -761,6 +810,28 @@ class model_kernel_F(model_kernel_F_nppd):
             color_mix,
             feature_mix
         ), 1), grid
+
+class model_kernel_F_T_nppd(model_kernel_F_nppd):
+    def __init__(self):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(10, 24, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(24, 24, 1),
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(24, 5, 1)
+        )
+
+        self.filter = PartitioningPyramid_Tiny(3)
+        self.weight_predictor = ConvUNet_F(
+            16,
+            self.filter.inputs
+        )
+
+    def temporal_init(self, x):
+        shape = list(x['color'].shape)
+        shape[1] = 11
+        return torch.zeros(shape, dtype=x['color'].dtype, device=x['color'].device)
 
 class model_kernel_W_nppd(model_kernel_F_nppd):
     def __init__(self):
